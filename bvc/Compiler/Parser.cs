@@ -1,6 +1,8 @@
 ﻿namespace bvc.Compiler;
 
 abstract record Node;
+record RootNode(Node[] Members) : Node;
+record EnumDeclarationNode(string Name, (string Name, long? Value)[] Members) : Node;
 abstract record ExpressionNode : Node;
 record BinaryExpressionNode(ExpressionNode Left, TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record UnaryExpressionNode(TokenType Operator, ExpressionNode Right) : ExpressionNode;
@@ -25,7 +27,49 @@ class Parser
         return TokenType.Error;
     }
 
-    public Node? Parse() => ParseExpression();
+    public RootNode? Parse()
+    {
+        var members = new List<Node>();
+
+        bool foundAny;
+        do
+        {
+            foundAny = false;
+            while (MatchTokenTypes(TokenType.EnumKeyword) != TokenType.Error)
+            {
+                if (MatchTokenTypes(TokenType.Identifier) == TokenType.Error) throw new NotImplementedException();
+                var name = ((IdentifierToken)LastMatchedToken!).Text;
+                if (MatchTokenTypes(TokenType.OpenBrace) == TokenType.Error) throw new NotImplementedException();
+
+                var enumMembers = new List<(string Name, long? Value)>();
+                var nextValue = 0L;
+                while (MatchTokenTypes(TokenType.Identifier) != TokenType.Error)
+                {
+                    var identifierToken = LastMatchedToken!;
+                    if (MatchTokenTypes(TokenType.Equals) != TokenType.Error)
+                    {
+                        if (MatchTokenTypes(TokenType.IntegerLiteral) == TokenType.Error) throw new NotImplementedException();
+                        var numericValue = ((IntegerLiteralToken)LastMatchedToken!).Value;
+                        nextValue = numericValue + 1;
+
+                        enumMembers.Add((identifierToken.Text, numericValue));
+                    }
+                    else
+                        enumMembers.Add((identifierToken.Text, nextValue++));
+
+                    if (MatchTokenTypes(TokenType.Comma) == TokenType.Error)
+                        break;
+                }
+
+                if (MatchTokenTypes(TokenType.CloseBrace) == TokenType.Error) throw new NotImplementedException();
+
+                members.Add(new EnumDeclarationNode(name, enumMembers.ToArray()));
+                foundAny = true;
+            }
+        } while (foundAny);
+
+        return new(members.ToArray());
+    }
 
     ExpressionNode? ParseExpression() => ParseEqualityExpression();
 
@@ -34,7 +78,7 @@ class Parser
         var left = ParseComparisonExpression();
         if (left is null) throw new NotImplementedException();
 
-        while (MatchTokenTypes(TokenType.EqualsKeyword, TokenType.NotEqualsKeyword) is { } operatorTokenType && operatorTokenType != TokenType.Error)
+        while (MatchTokenTypes(TokenType.EqualsEquals, TokenType.NotEquals) is { } operatorTokenType && operatorTokenType != TokenType.Error)
         {
             var right = ParseComparisonExpression();
             if (right is null) throw new NotImplementedException();
@@ -50,7 +94,7 @@ class Parser
         var left = ParseTermExpression();
         if (left is null) throw new NotImplementedException();
 
-        while (MatchTokenTypes(TokenType.LessThanKeyword, TokenType.LessThanEqualKeyword, TokenType.GreaterThanKeyword, TokenType.GreaterThanEqualKeyword) is { } operatorTokenType && operatorTokenType != TokenType.Error)
+        while (MatchTokenTypes(TokenType.LessThan, TokenType.LessThanEqual, TokenType.GreaterThan, TokenType.GreaterThanEqual) is { } operatorTokenType && operatorTokenType != TokenType.Error)
         {
             var right = ParseTermExpression();
             if (right is null) throw new NotImplementedException();
@@ -95,7 +139,7 @@ class Parser
 
     ExpressionNode? ParseUnaryExpression()
     {
-        if (MatchTokenTypes(TokenType.NotKeyword, TokenType.Minus) is { } operatorTokenType && operatorTokenType != TokenType.Error)
+        if (MatchTokenTypes(TokenType.Not, TokenType.Minus) is { } operatorTokenType && operatorTokenType != TokenType.Error)
         {
             var right = ParsePrimaryExpression();
             if (right is null) throw new NotImplementedException();

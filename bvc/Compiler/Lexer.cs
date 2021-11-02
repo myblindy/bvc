@@ -6,6 +6,8 @@ namespace bvc.Compiler;
 enum TokenType
 {
     StringLiteral,
+    IntegerLiteral,
+    DoubleLiteral,
     Identifier,
 
     OpenParentheses,
@@ -17,17 +19,22 @@ enum TokenType
     Minus,
     Star,
     Slash,
+    Comma,
+    Equals,
+    NotEquals,
+    LessThan,
+    LessThanEqual,
+    GreaterThan,
+    GreaterThanEqual,
+    EqualsEquals,
+    Not,
 
     IfKeyword,
-    EqualsKeyword,
-    LessThanKeyword,
-    LessThanEqualKeyword,
-    GreaterThanKeyword,
-    GreaterThanEqualKeyword,
-    NotEqualsKeyword,
-    NotKeyword,
     TrueKeyword,
     FalseKeyword,
+    VarKeyword,
+    EnumKeyword,
+    ClassKeyword,
 
     Error = int.MaxValue
 }
@@ -43,6 +50,10 @@ record StringLiteralToken : Token
 {
     public StringLiteralToken(string text) : base(text, TokenType.StringLiteral) { }
 }
+
+abstract record NumericLiteralToken(string Text, TokenType Type) : Token(Text, Type);
+record IntegerLiteralToken(string Text, long Value) : NumericLiteralToken(Text, TokenType.IntegerLiteral);
+record DoubleLiteralToken(string Text, double Value) : NumericLiteralToken(Text, TokenType.DoubleLiteral);
 
 record IdentifierToken : Token
 {
@@ -68,15 +79,11 @@ class Lexer
     static readonly Dictionary<string, TokenType> keywords = new()
     {
         ["if"] = TokenType.IfKeyword,
-        ["eq"] = TokenType.EqualsKeyword,
-        ["neq"] = TokenType.NotEqualsKeyword,
-        ["lt"] = TokenType.LessThanKeyword,
-        ["lte"] = TokenType.LessThanEqualKeyword,
-        ["gt"] = TokenType.GreaterThanKeyword,
-        ["gte"] = TokenType.GreaterThanEqualKeyword,
-        ["not"] = TokenType.NotKeyword,
         ["true"] = TokenType.TrueKeyword,
         ["false"] = TokenType.FalseKeyword,
+        ["var"] = TokenType.VarKeyword,
+        ["enum"] = TokenType.EnumKeyword,
+        ["class"] = TokenType.ClassKeyword,
     };
 
     readonly StringBuilder tokenSB = new();
@@ -129,6 +136,70 @@ class Lexer
                 case '-': return new SymbolToken(ch.ToString(), TokenType.Minus);
                 case '*': return new SymbolToken(ch.ToString(), TokenType.Star);
                 case '/': return new SymbolToken(ch.ToString(), TokenType.Slash);
+                case ',': return new SymbolToken(ch.ToString(), TokenType.Comma);
+                case '<' or '>' or '=':
+                    {
+                        var nextCh = (char)reader.Peek();
+                        if (nextCh is not '=')
+                            return new SymbolToken(ch.ToString(), ch switch
+                            {
+                                '<' => TokenType.LessThan,
+                                '>' => TokenType.GreaterThan,
+                                '=' => TokenType.Equals,
+                                _ => throw new NotImplementedException()
+                            });
+                        else
+                        {
+                            reader.Read();
+                            return new SymbolToken($"{ch}{nextCh}", ch switch
+                            {
+                                '<' => TokenType.LessThanEqual,
+                                '>' => TokenType.GreaterThanEqual,
+                                '=' => TokenType.EqualsEquals,
+                                _ => throw new NotImplementedException()
+                            });
+                        }
+                    }
+                case '!':
+                    {
+                        var nextCh = reader.Peek();
+                        if (nextCh == '=')
+                        {
+                            reader.Read();
+                            return new SymbolToken("!=", TokenType.NotEquals);
+                        }
+                        else
+                            return new SymbolToken("!", TokenType.Not);
+                    }
+                case >= '0' and <= '9':
+                    {
+                        tokenSB.Clear();
+                        tokenSB.Append(ch);
+
+                        var hasDot = false;
+
+                        while (true)
+                        {
+                            var nextCh = (char)reader.Peek();
+
+                            if (char.IsDigit(nextCh) || nextCh == '.')
+                            {
+                                reader.Read();
+                                tokenSB.Append(nextCh);
+                                hasDot |= nextCh == '.';
+                            }
+                            else
+                                break;
+                        }
+
+                        var token = tokenSB.ToString();
+                        if (hasDot && double.TryParse(token, out var doubleValue))
+                            return new DoubleLiteralToken(token, doubleValue);
+                        else if (!hasDot && long.TryParse(token, out var intValue))
+                            return new IntegerLiteralToken(token, intValue);
+                        else
+                            throw new NotImplementedException();
+                    }
                 default: throw new NotImplementedException();
             }
         }
