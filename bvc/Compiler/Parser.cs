@@ -3,6 +3,7 @@
 abstract record Node;
 record RootNode(Node[] Members) : Node;
 record EnumDeclarationNode(string Name, (string Name, long? Value)[] Members) : Node;
+record ClassDeclarationNode(string Name) : Node;
 abstract record ExpressionNode : Node;
 record BinaryExpressionNode(ExpressionNode Left, TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record UnaryExpressionNode(TokenType Operator, ExpressionNode Right) : ExpressionNode;
@@ -27,6 +28,13 @@ class Parser
         return TokenType.Error;
     }
 
+    TokenType ExpectTokenTypes(params TokenType[] tokenTypes)
+    {
+        var res = MatchTokenTypes(tokenTypes);
+        if (res == TokenType.Error) throw new NotImplementedException();
+        return res;
+    }
+
     public RootNode? Parse()
     {
         var members = new List<Node>();
@@ -35,11 +43,13 @@ class Parser
         do
         {
             foundAny = false;
+
+            // enum
             while (MatchTokenTypes(TokenType.EnumKeyword) != TokenType.Error)
             {
-                if (MatchTokenTypes(TokenType.Identifier) == TokenType.Error) throw new NotImplementedException();
+                ExpectTokenTypes(TokenType.Identifier);
                 var name = ((IdentifierToken)LastMatchedToken!).Text;
-                if (MatchTokenTypes(TokenType.OpenBrace) == TokenType.Error) throw new NotImplementedException();
+                ExpectTokenTypes(TokenType.OpenBrace);
 
                 var enumMembers = new List<(string Name, long? Value)>();
                 var nextValue = 0L;
@@ -48,7 +58,7 @@ class Parser
                     var identifierToken = LastMatchedToken!;
                     if (MatchTokenTypes(TokenType.Equals) != TokenType.Error)
                     {
-                        if (MatchTokenTypes(TokenType.IntegerLiteral) == TokenType.Error) throw new NotImplementedException();
+                        ExpectTokenTypes(TokenType.IntegerLiteral);
                         var numericValue = ((IntegerLiteralToken)LastMatchedToken!).Value;
                         nextValue = numericValue + 1;
 
@@ -61,10 +71,21 @@ class Parser
                         break;
                 }
 
-                if (MatchTokenTypes(TokenType.CloseBrace) == TokenType.Error) throw new NotImplementedException();
+                ExpectTokenTypes(TokenType.CloseBrace);
 
                 members.Add(new EnumDeclarationNode(name, enumMembers.ToArray()));
                 foundAny = true;
+            }
+
+            // class
+            while (MatchTokenTypes(TokenType.ClassKeyword) != TokenType.Error)
+            {
+                ExpectTokenTypes(TokenType.Identifier);
+                var name = ((IdentifierToken)LastMatchedToken!).Text;
+                ExpectTokenTypes(TokenType.OpenBrace);
+                ExpectTokenTypes(TokenType.CloseBrace);
+
+                members.Add(new ClassDeclarationNode(name));
             }
         } while (foundAny);
 
