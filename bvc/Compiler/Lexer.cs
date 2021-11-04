@@ -5,6 +5,8 @@ namespace bvc.Compiler;
 #region Tokens
 enum TokenType
 {
+    None,
+
     StringLiteral,
     IntegerLiteral,
     DoubleLiteral,
@@ -15,6 +17,7 @@ enum TokenType
     OpenBrace,
     CloseBrace,
     SemiColon,
+    Colon,
     Plus,
     Minus,
     Star,
@@ -33,8 +36,10 @@ enum TokenType
     TrueKeyword,
     FalseKeyword,
     VarKeyword,
+    ValKeyword,
     EnumKeyword,
     ClassKeyword,
+    FunKeyword,
 
     Error = int.MaxValue
 }
@@ -71,10 +76,8 @@ class Lexer
     private readonly StreamReader reader;
     private readonly Queue<Token> previewTokens = new();
 
-    public Lexer(Stream stream)
-    {
+    public Lexer(Stream stream) =>
         reader = new(stream, Encoding.Unicode);
-    }
 
     static readonly Dictionary<string, TokenType> keywords = new()
     {
@@ -82,8 +85,10 @@ class Lexer
         ["true"] = TokenType.TrueKeyword,
         ["false"] = TokenType.FalseKeyword,
         ["var"] = TokenType.VarKeyword,
+        ["val"] = TokenType.ValKeyword,
         ["enum"] = TokenType.EnumKeyword,
         ["class"] = TokenType.ClassKeyword,
+        ["fun"] = TokenType.FunKeyword,
     };
 
     readonly StringBuilder tokenSB = new();
@@ -137,6 +142,7 @@ class Lexer
                 case '*': return new SymbolToken(ch.ToString(), TokenType.Star);
                 case '/': return new SymbolToken(ch.ToString(), TokenType.Slash);
                 case ',': return new SymbolToken(ch.ToString(), TokenType.Comma);
+                case ':': return new SymbolToken(ch.ToString(), TokenType.Colon);
                 case '<' or '>' or '=':
                     {
                         var nextCh = (char)reader.Peek();
