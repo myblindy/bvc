@@ -1,6 +1,8 @@
 ﻿using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
+using static Mono.Cecil.TypeAttributes;
+using static Mono.Cecil.FieldAttributes;
 
 namespace bvc.Compiler;
 
@@ -10,14 +12,20 @@ class CodeGeneration
 
     public CodeGeneration(RootNode rootNode) => this.rootNode = rootNode;
 
-    abstract record Field(string Name);
-    record VariableField(string Name, object? InitialValue = null) : Field(Name);
+    abstract record Field(string Name, Declaration? Parent);
+    record VariableField(string Name, Declaration? Parent, object? InitialValue = null) : Field(Name, Parent);
 
-    abstract record Declaration(string Name);
-    record EnumDeclaration(string Name, Field[] Fields) : Declaration(Name);
-    record ClassDeclaration(string Name, Field[] Fields) : Declaration(Name);
+    abstract record Declaration(string Name, Declaration? Parent) : Field(Name, Parent);
+    abstract record DeclarationWithFields(string Name, Declaration? Parent) : Declaration(Name, Parent)
+    {
+        public Dictionary<string, Field> Fields { get; } = new();
+    }
+    record EnumDeclaration(string Name, Declaration? Parent) : DeclarationWithFields(Name, Parent);
+    record ClassDeclaration(string Name, Declaration? Parent) : DeclarationWithFields(Name, Parent);
 
-    readonly Dictionary<string, Declaration> declarations = new();
+    readonly Dictionary<string, Field> declarations = new();
+
+    Dictionary<string, Field> GetFields(DeclarationWithFields? parent) => parent?.Fields ?? declarations;
 
     public void Write(Stream stream, string assemblyName)
     {
@@ -25,56 +33,74 @@ class CodeGeneration
         var module = assembly.MainModule;
 
         // first parse out all the types
-        void ParseEnumDeclarationNode(EnumDeclarationNode enumDeclarationNode)
+        void ParseEnumDeclarationNode(EnumDeclarationNode enumDeclarationNode, DeclarationWithFields? parent)
         {
-            var fields = new Field[enumDeclarationNode.Members.Length];
+            var enumDeclaration = new EnumDeclaration(enumDeclarationNode.Name, parent);
+
             long nextValue = 0;
             for (int idx = 0; idx < enumDeclarationNode.Members.Length; ++idx)
-                fields[idx] = new VariableField(enumDeclarationNode.Members[idx].Name, (nextValue = (enumDeclarationNode.Members[idx].Value ?? nextValue) + 1) - 1);
-            declarations.Add(enumDeclarationNode.Name, new EnumDeclaration(enumDeclarationNode.Name, fields));
+                enumDeclaration.Fields.Add(enumDeclarationNode.Members[idx].Name, new VariableField(enumDeclarationNode.Members[idx].Name, enumDeclaration, (nextValue = (enumDeclarationNode.Members[idx].Value ?? nextValue) + 1) - 1));
+            GetFields(parent).Add(enumDeclarationNode.Name, enumDeclaration);
         }
 
-        void ParseClassDeclarationNode(ClassDeclarationNode classDeclaration)
+        void ParseClassDeclarationNode(ClassDeclarationNode classDeclarationNode, DeclarationWithFields? parent)
         {
-            declarations.Add(classDeclaration.Name, new ClassDeclaration(classDeclaration.Name, Array.Empty<Field>()));
+            var classDeclaration = new ClassDeclaration(classDeclarationNode.Name, parent);
+            ParseMembers(classDeclarationNode, classDeclaration);
+            GetFields(parent).Add(classDeclaration.Name, classDeclaration);
         }
 
-        foreach (var node in rootNode.Members)
-            if (node is EnumDeclarationNode enumDeclarationNode)
-                ParseEnumDeclarationNode(enumDeclarationNode);
-            else if (node is ClassDeclarationNode classDeclarationNode)
-                ParseClassDeclarationNode(classDeclarationNode);
-            else
-                throw new NotImplementedException();
+        void ParseMembers(NodeWithMembers nodeWithMembers, DeclarationWithFields? parent = null)
+        {
+            foreach (var node in nodeWithMembers.Members)
+                if (node is EnumDeclarationNode enumDeclarationNode)
+                    ParseEnumDeclarationNode(enumDeclarationNode, parent);
+                else if (node is ClassDeclarationNode classDeclarationNode)
+                    ParseClassDeclarationNode(classDeclarationNode, parent);
+                else
+                    throw new NotImplementedException();
+        }
+        ParseMembers(rootNode);
 
         // next generate the code
-        void WriteEnumDeclarationNode(EnumDeclarationNode enumDeclarationNode)
+        void WriteEnumDeclarationNode(EnumDeclarationNode enumDeclarationNode, DeclarationWithFields? parentDeclaration, TypeDefinition? parentType)
         {
-            var enumDeclaration = (EnumDeclaration)declarations[enumDeclarationNode.Name];
-            var enumTypeDefinition = new TypeDefinition(null, enumDeclaration.Name, TypeAttributes.Public, assembly.MainModule.ImportReference(typeof(Enum)));
+            var enumDeclaration = (EnumDeclaration)GetFields(parentDeclaration)[enumDeclarationNode.Name];
+            var enumTypeDefinition = new TypeDefinition(null, enumDeclaration.Name, (parentType is null ? TypeAttributes.Public : NestedPublic) | Sealed, assembly.MainModule.ImportReference(typeof(Enum)));
             enumTypeDefinition.Fields.Add(new("value__", FieldAttributes.SpecialName | FieldAttributes.RTSpecialName | FieldAttributes.Public, assembly.MainModule.TypeSystem.Int64));
 
-            foreach (var (Name, Value) in enumDeclaration.Fields.Cast<VariableField>())
-                enumTypeDefinition.Fields.Add(new(Name, FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.Public | FieldAttributes.HasDefault, enumTypeDefinition) { Constant = Value });
+            foreach (var (Name, _, Value) in enumDeclaration.Fields.Values.Cast<VariableField>())
+                enumTypeDefinition.Fields.Add(new(Name, Static | Literal | FieldAttributes.Public | HasDefault, enumTypeDefinition) { Constant = Value });
 
-            module.Types.Add(enumTypeDefinition);
-        }
-
-        void WriteClassDeclarationNode(ClassDeclarationNode classDeclarationNode)
-        {
-            var classDeclaration = (ClassDeclaration)declarations[classDeclarationNode.Name];
-            var classTypeDefinition = new TypeDefinition(null, classDeclaration.Name, TypeAttributes.Public, assembly.MainModule.TypeSystem.Object);
-
-            module.Types.Add(classTypeDefinition);
-        }
-
-        foreach (var node in rootNode.Members)
-            if (node is EnumDeclarationNode enumDeclarationNode)
-                WriteEnumDeclarationNode(enumDeclarationNode);
-            else if (node is ClassDeclarationNode classDeclarationNode)
-                WriteClassDeclarationNode(classDeclarationNode);
+            if (parentType is not null)
+                parentType.NestedTypes.Add(enumTypeDefinition);
             else
-                throw new NotImplementedException();
+                module!.Types.Add(enumTypeDefinition);
+        }
+
+        void WriteClassDeclarationNode(ClassDeclarationNode classDeclarationNode, DeclarationWithFields? parentDeclaration, TypeDefinition? parentType)
+        {
+            var classDeclaration = (ClassDeclaration)GetFields(parentDeclaration)[classDeclarationNode.Name];
+            var classTypeDefinition = new TypeDefinition(null, classDeclaration.Name, AnsiClass | BeforeFieldInit | (parentType is null ? TypeAttributes.Public : NestedPublic), assembly.MainModule.TypeSystem.Object);
+            WriteDeclarations(classDeclarationNode, classDeclaration, classTypeDefinition);
+
+            if (parentType is not null)
+                parentType.NestedTypes.Add(classTypeDefinition);
+            else
+                module!.Types.Add(classTypeDefinition);
+        }
+
+        void WriteDeclarations(NodeWithMembers nodeWithMembers, DeclarationWithFields? parentDeclaration = null, TypeDefinition? parentType = null)
+        {
+            foreach (var node in nodeWithMembers.Members)
+                if (node is EnumDeclarationNode enumDeclarationNode)
+                    WriteEnumDeclarationNode(enumDeclarationNode, parentDeclaration, parentType);
+                else if (node is ClassDeclarationNode classDeclarationNode)
+                    WriteClassDeclarationNode(classDeclarationNode, parentDeclaration, parentType);
+                else
+                    throw new NotImplementedException();
+        }
+        WriteDeclarations(rootNode);
 
         assembly.Write(stream);
     }

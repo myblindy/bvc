@@ -5,7 +5,11 @@ using var stream = new StringStream(@"
 enum Meep { A, B, C, D = 10, E, F }
 enum Arf { A = 9, B = 4, D = 0 }
 
-class C { }");
+class C { 
+    class IC {
+        enum Meep { X }
+    }
+}");
 
 var lexer = new Lexer(stream);
 

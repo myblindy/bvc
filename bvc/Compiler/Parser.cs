@@ -1,9 +1,13 @@
 ﻿namespace bvc.Compiler;
 
 abstract record Node;
-record RootNode(Node[] Members) : Node;
+abstract record NodeWithMembers : Node
+{
+    public List<Node> Members { get; } = new();
+}
+record RootNode : NodeWithMembers;
 record EnumDeclarationNode(string Name, (string Name, long? Value)[] Members) : Node;
-record ClassDeclarationNode(string Name) : Node;
+record ClassDeclarationNode(string Name) : NodeWithMembers;
 abstract record ExpressionNode : Node;
 record BinaryExpressionNode(ExpressionNode Left, TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record UnaryExpressionNode(TokenType Operator, ExpressionNode Right) : ExpressionNode;
@@ -35,10 +39,15 @@ class Parser
         return res;
     }
 
-    public RootNode? Parse()
+    public RootNode Parse()
     {
-        var members = new List<Node>();
+        var rootNode = new RootNode();
+        ParseMembers(rootNode);
+        return rootNode;
+    }
 
+    void ParseMembers(NodeWithMembers node)
+    {
         bool foundAny;
         do
         {
@@ -73,7 +82,7 @@ class Parser
 
                 ExpectTokenTypes(TokenType.CloseBrace);
 
-                members.Add(new EnumDeclarationNode(name, enumMembers.ToArray()));
+                node.Members.Add(new EnumDeclarationNode(name, enumMembers.ToArray()));
                 foundAny = true;
             }
 
@@ -83,13 +92,14 @@ class Parser
                 ExpectTokenTypes(TokenType.Identifier);
                 var name = ((IdentifierToken)LastMatchedToken!).Text;
                 ExpectTokenTypes(TokenType.OpenBrace);
-                ExpectTokenTypes(TokenType.CloseBrace);
 
-                members.Add(new ClassDeclarationNode(name));
+                var classDeclarationNode = new ClassDeclarationNode(name);
+                ParseMembers(classDeclarationNode);
+                node.Members.Add(classDeclarationNode);
+
+                ExpectTokenTypes(TokenType.CloseBrace);
             }
         } while (foundAny);
-
-        return new(members.ToArray());
     }
 
     ExpressionNode? ParseExpression() => ParseEqualityExpression();
