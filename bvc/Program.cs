@@ -7,6 +7,8 @@ enum Arf { A = 9, B = 4, D = 0 }
 
 class C(var a: Integer, var b: String, val c: Double, val arf: Arf) {
     fun F(x: Integer, y: Integer): Void {
+        var fld: Integer;
+        var fld2: Integer = (25 + 5) / 2 + -6;
     }
 
     fun Add(x: Double, y: Double): Double {

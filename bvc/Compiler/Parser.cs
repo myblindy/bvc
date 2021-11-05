@@ -8,11 +8,12 @@ abstract record NodeWithMembers : Node
 record RootNode : NodeWithMembers;
 record EnumDeclarationNode(string Name, (string Name, long? Value)[] Members) : Node;
 record ClassDeclarationNode(string Name) : NodeWithMembers;
-record FunctionDeclarationNode(string Name, string? ReturnType, (TokenType Modifier, string Name, string Type)[] Arguments) : Node
+record FunctionDeclarationNode(string Name, string? ReturnType, (TokenType Modifier, string Name, string Type)[] Arguments) : NodeWithMembers
 {
     public const string PrimaryConstructorName = ".ctor";
     public bool IsPrimaryConstructor => Name == PrimaryConstructorName;
 }
+record VariableDeclarationNode(string Name, string ReturnType, object? InitialValue) : Node;
 abstract record ExpressionNode : Node;
 record BinaryExpressionNode(ExpressionNode Left, TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record UnaryExpressionNode(TokenType Operator, ExpressionNode Right) : ExpressionNode;
@@ -47,11 +48,12 @@ class Parser
     public RootNode Parse()
     {
         var rootNode = new RootNode();
-        ParseMembers(rootNode);
+        ParseMembers(rootNode, MemberType.Class);
         return rootNode;
     }
 
-    void ParseMembers(NodeWithMembers node)
+    enum MemberType { Function, Class }
+    void ParseMembers(NodeWithMembers node, MemberType memberType)
     {
         bool foundAny;
         do
@@ -59,82 +61,84 @@ class Parser
             foundAny = false;
 
             // enum
-            while (MatchTokenTypes(TokenType.EnumKeyword) != TokenType.Error)
-            {
-                ExpectTokenTypes(TokenType.Identifier);
-                var name = ((IdentifierToken)LastMatchedToken!).Text;
-                ExpectTokenTypes(TokenType.OpenBrace);
-
-                var enumMembers = new List<(string Name, long? Value)>();
-                var nextValue = 0L;
-                while (MatchTokenTypes(TokenType.Identifier) != TokenType.Error)
+            if (memberType is MemberType.Class)
+                while (MatchTokenTypes(TokenType.EnumKeyword) != TokenType.Error)
                 {
-                    var identifierToken = LastMatchedToken!;
-                    if (MatchTokenTypes(TokenType.Equals) != TokenType.Error)
+                    ExpectTokenTypes(TokenType.Identifier);
+                    var name = ((IdentifierToken)LastMatchedToken!).Text;
+                    ExpectTokenTypes(TokenType.OpenBrace);
+
+                    var enumMembers = new List<(string Name, long? Value)>();
+                    var nextValue = 0L;
+                    while (MatchTokenTypes(TokenType.Identifier) != TokenType.Error)
                     {
-                        ExpectTokenTypes(TokenType.IntegerLiteral);
-                        var numericValue = ((IntegerLiteralToken)LastMatchedToken!).Value;
-                        nextValue = numericValue + 1;
+                        var identifierToken = LastMatchedToken!;
+                        if (MatchTokenTypes(TokenType.Equals) != TokenType.Error)
+                        {
+                            ExpectTokenTypes(TokenType.IntegerLiteral);
+                            var numericValue = ((IntegerLiteralToken)LastMatchedToken!).Value;
+                            nextValue = numericValue + 1;
 
-                        enumMembers.Add((identifierToken.Text, numericValue));
+                            enumMembers.Add((identifierToken.Text, numericValue));
+                        }
+                        else
+                            enumMembers.Add((identifierToken.Text, nextValue++));
+
+                        if (MatchTokenTypes(TokenType.Comma) == TokenType.Error)
+                            break;
                     }
-                    else
-                        enumMembers.Add((identifierToken.Text, nextValue++));
 
-                    if (MatchTokenTypes(TokenType.Comma) == TokenType.Error)
-                        break;
+                    ExpectTokenTypes(TokenType.CloseBrace);
+
+                    node.Members.Add(new EnumDeclarationNode(name, enumMembers.ToArray()));
+                    foundAny = true;
                 }
-
-                ExpectTokenTypes(TokenType.CloseBrace);
-
-                node.Members.Add(new EnumDeclarationNode(name, enumMembers.ToArray()));
-                foundAny = true;
-            }
 
             // class
             // class X { }
             // class X(var v: int, var j: int) { }
-            while (MatchTokenTypes(TokenType.ClassKeyword) != TokenType.Error)
-            {
-                ExpectTokenTypes(TokenType.Identifier);
-                var name = ((IdentifierToken)LastMatchedToken!).Text;
-                var classDeclarationNode = new ClassDeclarationNode(name);
-
-                // primary constructor
-                if (MatchTokenTypes(TokenType.OpenParentheses) != TokenType.Error)
+            if (memberType is MemberType.Class)
+                while (MatchTokenTypes(TokenType.ClassKeyword) != TokenType.Error)
                 {
-                    var args = new List<(TokenType Modifier, string Name, string Type)>();
-                    while (true)
+                    ExpectTokenTypes(TokenType.Identifier);
+                    var name = ((IdentifierToken)LastMatchedToken!).Text;
+                    var classDeclarationNode = new ClassDeclarationNode(name);
+
+                    // primary constructor
+                    if (MatchTokenTypes(TokenType.OpenParentheses) != TokenType.Error)
                     {
-                        if (args.Count > 0 && MatchTokenTypes(TokenType.Comma) == TokenType.Error)
-                            break;
+                        var args = new List<(TokenType Modifier, string Name, string Type)>();
+                        while (true)
+                        {
+                            if (args.Count > 0 && MatchTokenTypes(TokenType.Comma) == TokenType.Error)
+                                break;
 
-                        if (MatchTokenTypes(TokenType.ValKeyword, TokenType.VarKeyword) is { } varTypeTokenType && varTypeTokenType == TokenType.Error)
-                            break;
+                            if (MatchTokenTypes(TokenType.ValKeyword, TokenType.VarKeyword) is { } varTypeTokenType && varTypeTokenType == TokenType.Error)
+                                break;
 
-                        ExpectTokenTypes(TokenType.Identifier);
-                        var varName = LastMatchedToken!.Text;
+                            ExpectTokenTypes(TokenType.Identifier);
+                            var varName = LastMatchedToken!.Text;
 
-                        ExpectTokenTypes(TokenType.Colon);
+                            ExpectTokenTypes(TokenType.Colon);
 
-                        ExpectTokenTypes(TokenType.Identifier);
-                        var typeName = LastMatchedToken!.Text;
+                            ExpectTokenTypes(TokenType.Identifier);
+                            var typeName = LastMatchedToken!.Text;
 
-                        args.Add((varTypeTokenType, varName, typeName));
+                            args.Add((varTypeTokenType, varName, typeName));
+                        }
+                        ExpectTokenTypes(TokenType.CloseParentheses);
+
+                        classDeclarationNode.Members.Add(new FunctionDeclarationNode(FunctionDeclarationNode.PrimaryConstructorName, null, args.ToArray()));
                     }
-                    ExpectTokenTypes(TokenType.CloseParentheses);
 
-                    classDeclarationNode.Members.Add(new FunctionDeclarationNode(FunctionDeclarationNode.PrimaryConstructorName, null, args.ToArray()));
+                    ExpectTokenTypes(TokenType.OpenBrace);
+
+                    ParseMembers(classDeclarationNode, MemberType.Class);
+                    node.Members.Add(classDeclarationNode);
+
+                    foundAny = true;
+                    ExpectTokenTypes(TokenType.CloseBrace);
                 }
-
-                ExpectTokenTypes(TokenType.OpenBrace);
-
-                ParseMembers(classDeclarationNode);
-                node.Members.Add(classDeclarationNode);
-
-                foundAny = true;
-                ExpectTokenTypes(TokenType.CloseBrace);
-            }
 
             // functions
             // fun F(a: int, b: int) { }
@@ -165,11 +169,32 @@ class Parser
                 ExpectTokenTypes(TokenType.Identifier);
                 var returnType = LastMatchedToken!.Text;
 
+                var functionDeclarationNode = new FunctionDeclarationNode(name, returnType, args.ToArray());
+
                 ExpectTokenTypes(TokenType.OpenBrace);
+                ParseMembers(functionDeclarationNode, MemberType.Function);
                 ExpectTokenTypes(TokenType.CloseBrace);
 
                 foundAny = true;
-                node.Members.Add(new FunctionDeclarationNode(name, returnType, args.ToArray()));
+                node.Members.Add(functionDeclarationNode);
+            }
+
+            // variables
+            // var/val a: A;
+            while (MatchTokenTypes(TokenType.VarKeyword, TokenType.ValKeyword) is { } variableKindTokenType && variableKindTokenType != TokenType.Error)
+            {
+                ExpectTokenTypes(TokenType.Identifier);
+                var name = LastMatchedToken!.Text;
+                ExpectTokenTypes(TokenType.Colon);
+                ExpectTokenTypes(TokenType.Identifier);
+                var type = LastMatchedToken!.Text;
+                object? initialValue = default;
+                if (MatchTokenTypes(TokenType.Equals) != TokenType.Error)
+                    initialValue = ParseExpression();
+                ExpectTokenTypes(TokenType.SemiColon);
+
+                foundAny = true;
+                node.Members.Add(new VariableDeclarationNode(name, type, initialValue));
             }
         } while (foundAny);
     }
@@ -257,11 +282,13 @@ class Parser
     {
         if (MatchTokenTypes(TokenType.TrueKeyword, TokenType.FalseKeyword) is { } operatorTokenType && operatorTokenType != TokenType.Error)
             return new LiteralExpressionNode(operatorTokenType == TokenType.TrueKeyword);
-
-        if (MatchTokenTypes(TokenType.StringLiteral) != TokenType.Error)
+        else if (MatchTokenTypes(TokenType.StringLiteral) != TokenType.Error)
             return new LiteralExpressionNode(LastMatchedToken!.Text);
-
-        if (MatchTokenTypes(TokenType.OpenParentheses) != TokenType.Error)
+        else if (MatchTokenTypes(TokenType.IntegerLiteral) != TokenType.Error)
+            return new LiteralExpressionNode(long.Parse(LastMatchedToken!.Text));
+        else if (MatchTokenTypes(TokenType.DoubleLiteral) != TokenType.Error)
+            return new LiteralExpressionNode(double.Parse(LastMatchedToken!.Text));
+        else if (MatchTokenTypes(TokenType.OpenParentheses) != TokenType.Error)
         {
             var expr = ParseExpression();
             if (expr is null || lexer.Consume()!.Type != TokenType.CloseParentheses) throw new NotImplementedException();
