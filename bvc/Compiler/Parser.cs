@@ -13,12 +13,14 @@ record FunctionDeclarationNode(string Name, string? ReturnType, (TokenType Modif
     public const string PrimaryConstructorName = ".ctor";
     public bool IsPrimaryConstructor => Name == PrimaryConstructorName;
 }
-record VariableDeclarationNode(string Name, string ReturnType, object? InitialValue) : Node;
+record VariableDeclarationNode(string Name, string? ReturnType, ExpressionNode? InitialValueExpression) : Node;
 abstract record ExpressionNode : Node;
 record BinaryExpressionNode(ExpressionNode Left, TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record UnaryExpressionNode(TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record LiteralExpressionNode(object Value) : ExpressionNode;
 record GroupingExpressionNode(ExpressionNode Expression) : ExpressionNode;
+abstract record StatementNode : Node;
+record ReturnStatementNode(ExpressionNode Expression) : StatementNode;
 
 class Parser
 {
@@ -151,10 +153,8 @@ class Parser
                 var args = new List<(TokenType Modifier, string Name, string Type)>();
                 while (true)
                 {
-                    if (args.Count > 0 && MatchTokenTypes(TokenType.Comma) == TokenType.Error)
-                        break;
-
-                    ExpectTokenTypes(TokenType.Identifier);
+                    if (args.Count > 0 && MatchTokenTypes(TokenType.Comma) == TokenType.Error) break;
+                    if (MatchTokenTypes(TokenType.Identifier) == TokenType.Error) break;
                     var varName = LastMatchedToken!.Text;
 
                     ExpectTokenTypes(TokenType.Colon);
@@ -165,15 +165,27 @@ class Parser
                     args.Add((TokenType.None, varName, typeName));
                 }
                 ExpectTokenTypes(TokenType.CloseParentheses);
-                ExpectTokenTypes(TokenType.Colon);
-                ExpectTokenTypes(TokenType.Identifier);
-                var returnType = LastMatchedToken!.Text;
+
+                string? returnType = null;
+                if (MatchTokenTypes(TokenType.Colon) != TokenType.Error)
+                {
+                    ExpectTokenTypes(TokenType.Identifier);
+                    returnType = LastMatchedToken!.Text;
+                }
 
                 var functionDeclarationNode = new FunctionDeclarationNode(name, returnType, args.ToArray());
 
-                ExpectTokenTypes(TokenType.OpenBrace);
-                ParseMembers(functionDeclarationNode, MemberType.Function);
-                ExpectTokenTypes(TokenType.CloseBrace);
+                if (MatchTokenTypes(TokenType.OpenBrace) != TokenType.Error)
+                {
+                    ParseMembers(functionDeclarationNode, MemberType.Function);
+                    ExpectTokenTypes(TokenType.CloseBrace);
+                }
+                else
+                {
+                    ExpectTokenTypes(TokenType.Equals);
+                    functionDeclarationNode.Members.Add(new ReturnStatementNode(ParseExpression()!));
+                    ExpectTokenTypes(TokenType.SemiColon);
+                }
 
                 foundAny = true;
                 node.Members.Add(functionDeclarationNode);
@@ -185,20 +197,38 @@ class Parser
             {
                 ExpectTokenTypes(TokenType.Identifier);
                 var name = LastMatchedToken!.Text;
-                ExpectTokenTypes(TokenType.Colon);
-                ExpectTokenTypes(TokenType.Identifier);
-                var type = LastMatchedToken!.Text;
-                object? initialValue = default;
+                string? type = null;
+                if (MatchTokenTypes(TokenType.Colon) != TokenType.Error)
+                {
+                    ExpectTokenTypes(TokenType.Identifier);
+                    type = LastMatchedToken!.Text;
+                }
+                ExpressionNode? initialValue = default;
                 if (MatchTokenTypes(TokenType.Equals) != TokenType.Error)
                     initialValue = ParseExpression();
+                else if (type is null)
+                    throw new NotImplementedException();
                 ExpectTokenTypes(TokenType.SemiColon);
 
                 foundAny = true;
                 node.Members.Add(new VariableDeclarationNode(name, type, initialValue));
             }
+
+            // return
+            if (memberType == MemberType.Function)
+                while (MatchTokenTypes(TokenType.ReturnKeyword) != TokenType.Error)
+                {
+                    var expression = ParseExpression();
+                    if (expression is null) throw new NotImplementedException();
+                    ExpectTokenTypes(TokenType.SemiColon);
+
+                    foundAny = true;
+                    node.Members.Add(new ReturnStatementNode(expression));
+                }
         } while (foundAny);
     }
 
+    #region Parse Expression
     ExpressionNode? ParseExpression() => ParseEqualityExpression();
 
     ExpressionNode? ParseEqualityExpression()
@@ -298,4 +328,5 @@ class Parser
 
         throw new NotImplementedException();
     }
+    #endregion
 }

@@ -14,7 +14,7 @@ class CodeGeneration
     const string OperatorMulName = "op_Mul";
     const string OperatorDivName = "op_Div";
 
-    string TokenTypeToOperatorName(TokenType tokenType) => tokenType switch
+    static string TokenTypeToOperatorName(TokenType tokenType) => tokenType switch
     {
         TokenType.Plus => OperatorAddName,
         TokenType.Minus => OperatorSubName,
@@ -23,45 +23,50 @@ class CodeGeneration
         _ => throw new NotImplementedException()
     };
 
+    readonly ClassDeclaration IntegerClassDeclaration = new("Integer", null);
+    readonly ClassDeclaration DoubleClassDeclaration = new("Double", null);
+    readonly ClassDeclaration StringClassDeclaration = new("String", null);
+    readonly ClassDeclaration VoidClassDeclaration = new("Void", null);
+
     public CodeGeneration(RootNode rootNode)
     {
         this.rootNode = rootNode;
 
-        var integerClassDeclaration = new ClassDeclaration("Integer", null); declarations[("Integer", null)] = integerClassDeclaration;
-        var doubleClassDeclaration = new ClassDeclaration("Double", null); declarations[("Double", null)] = doubleClassDeclaration;
-        var stringClassDeclaration = new ClassDeclaration("String", null); declarations[("String", null)] = stringClassDeclaration;
-        declarations[("Void", null)] = new ClassDeclaration("Void", null);
+        declarations[(IntegerClassDeclaration.Name!, null)] = IntegerClassDeclaration;
+        declarations[(DoubleClassDeclaration.Name!, null)] = DoubleClassDeclaration;
+        declarations[(StringClassDeclaration.Name!, null)] = StringClassDeclaration;
+        declarations[(VoidClassDeclaration.Name!, null)] = VoidClassDeclaration;
 
         static void addBinaryOperation(ClassDeclaration c, string op, ClassDeclaration ret, ClassDeclaration right) =>
-            c.Fields.Add((op, new[] { right }), new FunctionDeclaration(op, ret, new Parameter[] { new(null, right, "right") }, c));
+            c.Members.Add((op, new[] { right }), new FunctionDeclaration(op, ret, new Parameter[] { new(null, right, "right") }, c));
 
-        addBinaryOperation(integerClassDeclaration, OperatorAddName, integerClassDeclaration, integerClassDeclaration);
-        addBinaryOperation(integerClassDeclaration, OperatorAddName, doubleClassDeclaration, doubleClassDeclaration);
-        addBinaryOperation(integerClassDeclaration, OperatorSubName, integerClassDeclaration, integerClassDeclaration);
-        addBinaryOperation(integerClassDeclaration, OperatorSubName, doubleClassDeclaration, doubleClassDeclaration);
-        addBinaryOperation(integerClassDeclaration, OperatorDivName, integerClassDeclaration, integerClassDeclaration);
-        addBinaryOperation(integerClassDeclaration, OperatorDivName, doubleClassDeclaration, doubleClassDeclaration);
-        addBinaryOperation(integerClassDeclaration, OperatorMulName, integerClassDeclaration, integerClassDeclaration);
-        addBinaryOperation(integerClassDeclaration, OperatorMulName, doubleClassDeclaration, doubleClassDeclaration);
+        addBinaryOperation(IntegerClassDeclaration, OperatorAddName, IntegerClassDeclaration, IntegerClassDeclaration);
+        addBinaryOperation(IntegerClassDeclaration, OperatorAddName, DoubleClassDeclaration, DoubleClassDeclaration);
+        addBinaryOperation(IntegerClassDeclaration, OperatorSubName, IntegerClassDeclaration, IntegerClassDeclaration);
+        addBinaryOperation(IntegerClassDeclaration, OperatorSubName, DoubleClassDeclaration, DoubleClassDeclaration);
+        addBinaryOperation(IntegerClassDeclaration, OperatorDivName, IntegerClassDeclaration, IntegerClassDeclaration);
+        addBinaryOperation(IntegerClassDeclaration, OperatorDivName, DoubleClassDeclaration, DoubleClassDeclaration);
+        addBinaryOperation(IntegerClassDeclaration, OperatorMulName, IntegerClassDeclaration, IntegerClassDeclaration);
+        addBinaryOperation(IntegerClassDeclaration, OperatorMulName, DoubleClassDeclaration, DoubleClassDeclaration);
 
-        addBinaryOperation(doubleClassDeclaration, OperatorAddName, doubleClassDeclaration, doubleClassDeclaration);
-        addBinaryOperation(doubleClassDeclaration, OperatorAddName, doubleClassDeclaration, integerClassDeclaration);
-        addBinaryOperation(doubleClassDeclaration, OperatorSubName, doubleClassDeclaration, doubleClassDeclaration);
-        addBinaryOperation(doubleClassDeclaration, OperatorSubName, doubleClassDeclaration, integerClassDeclaration);
-        addBinaryOperation(doubleClassDeclaration, OperatorDivName, doubleClassDeclaration, doubleClassDeclaration);
-        addBinaryOperation(doubleClassDeclaration, OperatorDivName, doubleClassDeclaration, integerClassDeclaration);
-        addBinaryOperation(doubleClassDeclaration, OperatorMulName, doubleClassDeclaration, doubleClassDeclaration);
-        addBinaryOperation(doubleClassDeclaration, OperatorMulName, doubleClassDeclaration, integerClassDeclaration);
+        addBinaryOperation(DoubleClassDeclaration, OperatorAddName, DoubleClassDeclaration, DoubleClassDeclaration);
+        addBinaryOperation(DoubleClassDeclaration, OperatorAddName, DoubleClassDeclaration, IntegerClassDeclaration);
+        addBinaryOperation(DoubleClassDeclaration, OperatorSubName, DoubleClassDeclaration, DoubleClassDeclaration);
+        addBinaryOperation(DoubleClassDeclaration, OperatorSubName, DoubleClassDeclaration, IntegerClassDeclaration);
+        addBinaryOperation(DoubleClassDeclaration, OperatorDivName, DoubleClassDeclaration, DoubleClassDeclaration);
+        addBinaryOperation(DoubleClassDeclaration, OperatorDivName, DoubleClassDeclaration, IntegerClassDeclaration);
+        addBinaryOperation(DoubleClassDeclaration, OperatorMulName, DoubleClassDeclaration, DoubleClassDeclaration);
+        addBinaryOperation(DoubleClassDeclaration, OperatorMulName, DoubleClassDeclaration, IntegerClassDeclaration);
 
-        addBinaryOperation(stringClassDeclaration, OperatorAddName, stringClassDeclaration, stringClassDeclaration);
+        addBinaryOperation(StringClassDeclaration, OperatorAddName, StringClassDeclaration, StringClassDeclaration);
     }
 
-    class DeclarationKeyComparer : IEqualityComparer<(string Name, Field[]? ParameterTypeFields)>
+    class DeclarationKeyComparer : IEqualityComparer<(string Name, Member[]? ParameterTypeFields)>
     {
-        public bool Equals((string Name, Field[]? ParameterTypeFields) x, (string Name, Field[]? ParameterTypeFields) y) =>
+        public bool Equals((string Name, Member[]? ParameterTypeFields) x, (string Name, Member[]? ParameterTypeFields) y) =>
             x.Name == y.Name && (x.ParameterTypeFields?.Length ?? 0) == (y.ParameterTypeFields?.Length ?? 0);
 
-        public int GetHashCode([DisallowNull] (string Name, Field[]? ParameterTypeFields) obj)
+        public int GetHashCode([DisallowNull] (string Name, Member[]? ParameterTypeFields) obj)
         {
             var hash = new HashCode();
             hash.Add(obj.Name);
@@ -72,25 +77,32 @@ class CodeGeneration
         }
     }
 
-    abstract record Field(string Name, DeclarationWithFields? Parent);
-    record VariableField(string Name, Field? Type, DeclarationWithFields? Parent, object? InitialValue = null) : Field(Name, Parent);
+    abstract record Member(string? Name, DeclarationWithMembers? Parent);
+    record VariableMember(string Name, Member? Type, DeclarationWithMembers? Parent, ExpressionNode? InitialValueExpression = null) : Member(Name, Parent);
 
-    abstract record Declaration(string Name, DeclarationWithFields? Parent) : Field(Name, Parent);
-    abstract record DeclarationWithFields(string Name, DeclarationWithFields? Parent) : Declaration(Name, Parent)
+    abstract record Statement(DeclarationWithMembers? Parent) : Member(null, Parent);
+    record ReturnStatement(ExpressionNode ExpressionNode, DeclarationWithMembers? Parent) : Statement(Parent);
+
+    abstract record Declaration(string Name, DeclarationWithMembers? Parent) : Member(Name, Parent);
+    abstract record DeclarationWithMembers(string Name, DeclarationWithMembers? Parent) : Declaration(Name, Parent)
     {
-        public Dictionary<(string Name, Field[]? ParameterTypeFields), Field> Fields { get; } = new(new DeclarationKeyComparer());
+        public Dictionary<(string Name, Member[]? ParameterTypeFields), Member> Members { get; } = new(new DeclarationKeyComparer());
     }
-    record EnumDeclaration(string Name, DeclarationWithFields? Parent) : DeclarationWithFields(Name, Parent);
-    record ClassDeclaration(string Name, DeclarationWithFields? Parent) : DeclarationWithFields(Name, Parent);
+    record EnumDeclaration(string Name, DeclarationWithMembers? Parent) : DeclarationWithMembers(Name, Parent);
+    record ClassDeclaration(string Name, DeclarationWithMembers? Parent) : DeclarationWithMembers(Name, Parent);
 
-    record Parameter(TokenType? Modifier, Field Type, string Name);
-    record FunctionDeclaration(string Name, Field? ReturnType, Parameter[] Parameters, DeclarationWithFields? Parent) : DeclarationWithFields(Name, Parent);
+    record Parameter(TokenType? Modifier, Member Type, string Name);
+    record FunctionDeclaration(string Name, Parameter[] Parameters, DeclarationWithMembers? Parent) : DeclarationWithMembers(Name, Parent)
+    {
+        public FunctionDeclaration(string Name, Member? returnType, Parameter[] Parameters, DeclarationWithMembers? Parent) : this(Name, Parameters, Parent) => ReturnType = returnType;
+        public Member? ReturnType { get; set; }
+    }
 
-    readonly Dictionary<(string Name, Field[]? ParameterTypeFields), Field> declarations = new(new DeclarationKeyComparer());
+    readonly Dictionary<(string Name, Member[]? ParameterTypeFields), Member> declarations = new(new DeclarationKeyComparer());
 
-    Dictionary<(string Name, Field[]? ParameterTypeFields), Field> GetFields(DeclarationWithFields? parent) => parent?.Fields ?? declarations;
+    Dictionary<(string Name, Member[]? ParameterTypeFields), Member> GetFields(DeclarationWithMembers? parent) => parent?.Members ?? declarations;
 
-    Field? FindField(string name, Field[]? argumentTypeFields = null, DeclarationWithFields? parent = null)
+    Member? FindField(string name, Member[]? argumentTypeFields = null, DeclarationWithMembers? parent = null)
     {
         while (true)
         {
@@ -108,7 +120,7 @@ class CodeGeneration
         var assembly = AssemblyDefinition.CreateAssembly(new(assemblyName, new()), assemblyName, ModuleKind.Dll);
         var module = assembly.MainModule;
 
-        TypeReference GetTypeReference(Field? typeField) => typeField?.Name switch
+        TypeReference GetTypeReference(Member? typeField) => typeField?.Name switch
         {
             null or "Void" => module!.TypeSystem.Void,
             "Integer" => module!.TypeSystem.Int64,
@@ -118,7 +130,7 @@ class CodeGeneration
         };
 
         // first parse out all the types
-        Field ParseExpressionNodeTypeField(ExpressionNode expressionNode, DeclarationWithFields? parent)
+        Member ParseExpressionNodeTypeField(ExpressionNode expressionNode, DeclarationWithMembers? parent)
         {
             switch (expressionNode)
             {
@@ -139,41 +151,47 @@ class CodeGeneration
                         var leftTypeField = ParseExpressionNodeTypeField(binaryExpressionNode.Left, parent);
                         var rightTypeField = ParseExpressionNodeTypeField(binaryExpressionNode.Right, parent);
                         var fnName = TokenTypeToOperatorName(binaryExpressionNode.Operator);
-                        return FindField(fnName, new[] { rightTypeField }, (DeclarationWithFields)leftTypeField)!;
+                        return ((FunctionDeclaration)FindField(fnName, new[] { rightTypeField }, (DeclarationWithMembers)leftTypeField)!).ReturnType!;
                     }
+
+                case GroupingExpressionNode groupingExpressionNode:
+                    return ParseExpressionNodeTypeField(groupingExpressionNode.Expression, parent);
             }
 
             throw new NotImplementedException();
         }
 
-        void ParseEnumDeclarationNode(EnumDeclarationNode enumDeclarationNode, DeclarationWithFields? parent)
+        void ParseEnumDeclarationNode(EnumDeclarationNode enumDeclarationNode, DeclarationWithMembers? parent)
         {
             var enumDeclaration = new EnumDeclaration(enumDeclarationNode.Name, parent);
 
             long nextValue = 0;
             for (int idx = 0; idx < enumDeclarationNode.Members.Length; ++idx)
-                enumDeclaration.Fields.Add((enumDeclarationNode.Members[idx].Name, null), new VariableField(enumDeclarationNode.Members[idx].Name,
-                    null, enumDeclaration, (nextValue = (enumDeclarationNode.Members[idx].Value ?? nextValue) + 1) - 1));
+                enumDeclaration.Members.Add((enumDeclarationNode.Members[idx].Name, null), new VariableMember(enumDeclarationNode.Members[idx].Name,
+                    null, enumDeclaration, new LiteralExpressionNode((nextValue = (enumDeclarationNode.Members[idx].Value ?? nextValue) + 1) - 1)));
             GetFields(parent).Add((enumDeclarationNode.Name, null), enumDeclaration);
         }
 
-        void ParseClassDeclarationNode(ClassDeclarationNode classDeclarationNode, DeclarationWithFields? parent)
+        void ParseClassDeclarationNode(ClassDeclarationNode classDeclarationNode, DeclarationWithMembers? parent)
         {
             var classDeclaration = new ClassDeclaration(classDeclarationNode.Name, parent);
             ParseMembers(classDeclarationNode, classDeclaration);
-            GetFields(parent).Add((classDeclaration.Name, null), classDeclaration);
+            GetFields(parent).Add((classDeclaration.Name!, null), classDeclaration);
         }
 
-        Field? GetTypeField(string name, DeclarationWithFields? parent)
+        Member? GetTypeField(string? name, DeclarationWithMembers? parent)
         {
             if (name is null) return null;
             if (parent is null) return declarations.TryGetValue((name, null), out var field2) ? field2 : null;
-            if (parent?.Fields.TryGetValue((name, null), out var field) == true) return field;
+            if (parent?.Members.TryGetValue((name, null), out var field) == true) return field;
             return GetTypeField(name, parent!.Parent);
         }
 
-        void ParseFunctionDeclarationNode(FunctionDeclarationNode functionDeclarationNode, DeclarationWithFields? parent)
+        void ParseFunctionDeclarationNode(FunctionDeclarationNode functionDeclarationNode, DeclarationWithMembers? parent)
         {
+            long unreachableIdx = 0;
+            string nextUnreachableId() => $"<>{unreachableIdx++}";
+
             var functionDeclaration = new FunctionDeclaration(functionDeclarationNode.Name, GetTypeField(functionDeclarationNode.ReturnType, parent),
                 functionDeclarationNode.Arguments.Select(w => new Parameter(w.Modifier, GetTypeField(w.Type, parent)!, w.Name)).ToArray(), parent);
 
@@ -181,16 +199,38 @@ class CodeGeneration
                 switch (member)
                 {
                     case VariableDeclarationNode variableDeclarationNode:
-                        functionDeclaration.Fields.Add((variableDeclarationNode.Name, null), new VariableField(variableDeclarationNode.Name, GetTypeField(variableDeclarationNode.ReturnType, parent),
-                            parent, variableDeclarationNode.InitialValue));
+                        ParseVariableDeclarationNode(variableDeclarationNode, functionDeclaration);
+                        break;
+                    case ReturnStatementNode returnStatementNode:
+                        var inferredType = ParseExpressionNodeTypeField(returnStatementNode.Expression, parent);
+                        if (functionDeclaration.ReturnType is null)
+                            functionDeclaration.ReturnType = inferredType;
+                        else if (functionDeclaration.ReturnType != inferredType)
+                            throw new NotImplementedException();
+
+                        functionDeclaration.Members.Add((nextUnreachableId(), null), new ReturnStatement(returnStatementNode.Expression, parent));
                         break;
                     default: throw new NotImplementedException();
                 }
 
-            GetFields(parent).Add((functionDeclaration.Name, functionDeclaration.Parameters.Select(p => p.Type).ToArray()), functionDeclaration);
+            GetFields(parent).Add((functionDeclaration.Name!, functionDeclaration.Parameters.Select(p => p.Type).ToArray()), functionDeclaration);
         }
 
-        void ParseMembers(NodeWithMembers nodeWithMembers, DeclarationWithFields? parent = null)
+        void ParseVariableDeclarationNode(VariableDeclarationNode variableDeclarationNode, DeclarationWithMembers parent)
+        {
+            var varTypeField = GetTypeField(variableDeclarationNode.ReturnType, parent);
+            var inferredVarTypeField = variableDeclarationNode.InitialValueExpression is null ? null : ParseExpressionNodeTypeField(variableDeclarationNode.InitialValueExpression!, parent);
+
+            if (varTypeField is null && inferredVarTypeField is not null)
+                varTypeField = inferredVarTypeField;
+            else if (varTypeField is null && inferredVarTypeField is null || varTypeField != inferredVarTypeField && inferredVarTypeField is not null)
+                throw new NotImplementedException();
+
+            parent.Members.Add((variableDeclarationNode.Name, null),
+                new VariableMember(variableDeclarationNode.Name, varTypeField!, parent, variableDeclarationNode.InitialValueExpression));
+        }
+
+        void ParseMembers(NodeWithMembers nodeWithMembers, DeclarationWithMembers? parent = null)
         {
             foreach (var node in nodeWithMembers.Members)
                 if (node is EnumDeclarationNode enumDeclarationNode)
@@ -199,21 +239,23 @@ class CodeGeneration
                     ParseClassDeclarationNode(classDeclarationNode, parent);
                 else if (node is FunctionDeclarationNode functionDeclarationNode)
                     ParseFunctionDeclarationNode(functionDeclarationNode, parent);
+                else if (node is VariableDeclarationNode variableDeclarationNode)
+                    ParseVariableDeclarationNode(variableDeclarationNode, parent!);
                 else
                     throw new NotImplementedException();
         }
         ParseMembers(rootNode);
 
         // next generate the code
-        void WriteEnumDeclarationNode(EnumDeclarationNode enumDeclarationNode, DeclarationWithFields? parentDeclaration, TypeDefinition? parentType)
+        void WriteEnumDeclarationNode(EnumDeclarationNode enumDeclarationNode, DeclarationWithMembers? parentDeclaration, TypeDefinition? parentType)
         {
             var enumDeclaration = (EnumDeclaration)FindField(enumDeclarationNode.Name, parent: parentDeclaration)!;
             var enumTypeDefinition = new TypeDefinition(null, enumDeclaration.Name, (parentType is null ? TypeAttributes.Public : TypeAttributes.NestedPublic) | TypeAttributes.Sealed,
                 assembly.MainModule.ImportReference(typeof(Enum)));
             enumTypeDefinition.Fields.Add(new("value__", FieldAttributes.SpecialName | FieldAttributes.RTSpecialName | FieldAttributes.Public, assembly.MainModule.TypeSystem.Int64));
 
-            foreach (var (Name, _, _, Value) in enumDeclaration.Fields.Values.Cast<VariableField>())
-                enumTypeDefinition.Fields.Add(new(Name, FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.Public | FieldAttributes.HasDefault, enumTypeDefinition) { Constant = Value });
+            foreach (var (Name, _, _, Expression) in enumDeclaration.Members.Values.Cast<VariableMember>())
+                enumTypeDefinition.Fields.Add(new(Name, FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.Public | FieldAttributes.HasDefault, enumTypeDefinition) { Constant = ((LiteralExpressionNode)Expression!).Value });
 
             if (parentType is not null)
                 parentType.NestedTypes.Add(enumTypeDefinition);
@@ -221,12 +263,16 @@ class CodeGeneration
                 module!.Types.Add(enumTypeDefinition);
         }
 
-        void WriteClassDeclarationNode(ClassDeclarationNode classDeclarationNode, DeclarationWithFields? parentDeclaration, TypeDefinition? parentType)
+        void WriteClassDeclarationNode(ClassDeclarationNode classDeclarationNode, DeclarationWithMembers? parentDeclaration, TypeDefinition? parentType)
         {
             var classDeclaration = (ClassDeclaration)FindField(classDeclarationNode.Name, parent: parentDeclaration)!;
             var classTypeDefinition = new TypeDefinition(null, classDeclaration.Name,
                 TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit | (parentType is null ? TypeAttributes.Public : TypeAttributes.NestedPublic), assembly.MainModule.TypeSystem.Object);
             WriteDeclarations(classDeclarationNode, classDeclaration, classTypeDefinition);
+
+            // finalize all constructors, they were left unfinished to write field initialization
+            foreach (var constructorDefinition in classTypeDefinition.Methods.Where(m => m.IsConstructor))
+                constructorDefinition.Body.GetILProcessor().Emit(OpCodes.Ret);
 
             if (parentType is not null)
                 parentType.NestedTypes.Add(classTypeDefinition);
@@ -234,7 +280,7 @@ class CodeGeneration
                 module!.Types.Add(classTypeDefinition);
         }
 
-        void WriteFunctionDeclarationNode(FunctionDeclarationNode functionDeclarationNode, DeclarationWithFields? parentDeclaration, TypeDefinition? parentTypeDefinition)
+        void WriteFunctionDeclarationNode(FunctionDeclarationNode functionDeclarationNode, DeclarationWithMembers? parentDeclaration, TypeDefinition? parentTypeDefinition)
         {
             var functionDeclaration = (FunctionDeclaration)FindField(functionDeclarationNode.Name,
                 functionDeclarationNode.Arguments.Select(a => GetTypeField(a.Type, parentDeclaration)!).ToArray(), parentDeclaration)!;
@@ -262,7 +308,7 @@ class CodeGeneration
                 functionIl.Emit(OpCodes.Ldarg_0);
                 functionIl.Emit(OpCodes.Call, module!.ImportReference(TypeHelpers.DefaultCtorFor(parentTypeDefinition!.BaseType)));
 
-                // create the backing properties
+                // create the backing properties for the primary constructor
                 parameterIdx = 0;
                 foreach (var parameter in functionDeclaration.Parameters)
                 {
@@ -313,27 +359,34 @@ class CodeGeneration
             else
             {
                 var variables = new Dictionary<string, VariableDefinition>();
-                foreach (var field in functionDeclaration.Fields.Values)
+                foreach (var field in functionDeclaration.Members.Values)
                     switch (field)
                     {
-                        case VariableField variableField:
+                        case VariableMember variableField:
                             {
                                 var variableDefinition = new VariableDefinition(GetTypeReference(variableField.Type));
-                                variables.Add(variableField.Name, variableDefinition);
+                                variables.Add(variableField.Name!, variableDefinition);
                                 functionDefinition.Body.Variables.Add(variableDefinition);
 
-                                if (variableField.InitialValue is ExpressionNode expressionNode)
+                                if (variableField.InitialValueExpression is { } expressionNode)
                                 {
-                                    WriteExpressionNode(expressionNode, functionIl, functionDeclaration, functionDefinition);
+                                    WriteExpressionNode(expressionNode, functionIl, functionDeclaration);
                                     functionIl.Emit(OpCodes.Stloc, variableDefinition);
                                 }
 
                                 break;
                             }
+                        case ReturnStatement returnStatement:
+                            {
+                                WriteExpressionNode(returnStatement.ExpressionNode, functionIl, functionDeclaration);
+                                functionIl.Emit(OpCodes.Ret);
+                                break;
+                            }
+                        default: throw new NotImplementedException();
                     }
-            }
 
-            functionIl.Emit(OpCodes.Ret);
+                functionIl.Emit(OpCodes.Ret);
+            }
 
             if (parentTypeDefinition is not null)
                 parentTypeDefinition.Methods.Add(functionDefinition);
@@ -341,34 +394,56 @@ class CodeGeneration
                 throw new NotImplementedException();
         }
 
-        void WriteExpressionNode(ExpressionNode expressionNode, ILProcessor ilProcessor, DeclarationWithFields parentDeclaration, MethodDefinition parentDefinition)
+        void WriteVariableDeclarationNode(VariableDeclarationNode variableDeclarationNode, DeclarationWithMembers parentDeclaration, TypeDefinition? parentTypeDefinition)
+        {
+            var variableField = (VariableMember)GetTypeField(variableDeclarationNode.Name, parentDeclaration)!;
+            var variableDefinition = new FieldDefinition(variableDeclarationNode.Name, FieldAttributes.Public, GetTypeReference(variableField.Type));
+            parentTypeDefinition!.Fields.Add(variableDefinition);
+
+            if (variableDeclarationNode.InitialValueExpression is not null)
+                foreach (var constructorDefinition in parentTypeDefinition.Methods.Where(m => m.IsConstructor))
+                {
+                    var ilProcessor = constructorDefinition.Body.GetILProcessor();
+                    ilProcessor.Emit(OpCodes.Ldarg_0);
+                    WriteExpressionNode(variableDeclarationNode.InitialValueExpression, ilProcessor, parentDeclaration);
+                    ilProcessor.Emit(OpCodes.Stfld, variableDefinition);
+                }
+        }
+
+        Member? WriteExpressionNode(ExpressionNode expressionNode, ILProcessor ilProcessor, DeclarationWithMembers parentDeclaration)
         {
             switch (expressionNode)
             {
                 case LiteralExpressionNode literalExpressionNode:
                     switch (literalExpressionNode.Value)
                     {
-                        case long longValue: ilProcessor.Emit(OpCodes.Ldc_I8, longValue); break;
-                        case double doubleValue: ilProcessor.Emit(OpCodes.Ldc_R8, doubleValue); break;
-                        case string stringValue: ilProcessor.Emit(OpCodes.Ldstr, stringValue); break;
+                        case long longValue: ilProcessor.Emit(OpCodes.Ldc_I8, longValue); return FindField("Integer");
+                        case double doubleValue: ilProcessor.Emit(OpCodes.Ldc_R8, doubleValue); return FindField("Double");
+                        case string stringValue: ilProcessor.Emit(OpCodes.Ldstr, stringValue); return FindField("String");
                         default: throw new NotImplementedException();
                     }
-                    break;
                 case GroupingExpressionNode groupingExpressionNode:
-                    WriteExpressionNode(groupingExpressionNode.Expression, ilProcessor, parentDeclaration, parentDefinition);
-                    break;
+                    return WriteExpressionNode(groupingExpressionNode.Expression, ilProcessor, parentDeclaration);
                 case UnaryExpressionNode unaryExpressionNode:
-                    WriteExpressionNode(unaryExpressionNode.Right, ilProcessor, parentDeclaration, parentDefinition);
+                    var type = WriteExpressionNode(unaryExpressionNode.Right, ilProcessor, parentDeclaration);
                     ilProcessor.Emit(unaryExpressionNode.Operator switch
                     {
                         TokenType.Not => OpCodes.Not,
                         TokenType.Minus => OpCodes.Neg,
                         _ => throw new NotImplementedException()
                     });
-                    break;
+                    return type;
                 case BinaryExpressionNode binaryExpressionNode:
-                    WriteExpressionNode(binaryExpressionNode.Left, ilProcessor, parentDeclaration, parentDefinition);
-                    WriteExpressionNode(binaryExpressionNode.Right, ilProcessor, parentDeclaration, parentDefinition);
+                    var leftTypeField = WriteExpressionNode(binaryExpressionNode.Left, ilProcessor, parentDeclaration);
+                    var insertionPoint = ilProcessor.Body.Instructions.Last();
+                    var rightTypeField = WriteExpressionNode(binaryExpressionNode.Right, ilProcessor, parentDeclaration);
+
+                    // auto-promotion rules
+                    if (leftTypeField?.Name is "Integer" && rightTypeField?.Name is "Double")
+                        ilProcessor.InsertAfter(insertionPoint, ilProcessor.Create(OpCodes.Conv_R8));
+                    else if (leftTypeField?.Name is "Double" && rightTypeField?.Name is "Integer")
+                        ilProcessor.Emit(OpCodes.Conv_R8);
+
                     ilProcessor.Emit(binaryExpressionNode.Operator switch
                     {
                         TokenType.Plus => OpCodes.Add,
@@ -377,12 +452,14 @@ class CodeGeneration
                         TokenType.Star => OpCodes.Mul,
                         _ => throw new NotImplementedException()
                     });
-                    break;
+
+                    var fnName = TokenTypeToOperatorName(binaryExpressionNode.Operator);
+                    return ((FunctionDeclaration)FindField(fnName, new[] { rightTypeField! }, (DeclarationWithMembers)leftTypeField!)!).ReturnType!;
                 default: throw new NotImplementedException();
             }
         }
 
-        void WriteDeclarations(NodeWithMembers nodeWithMembers, DeclarationWithFields? parentDeclaration = null, TypeDefinition? parentType = null)
+        void WriteDeclarations(NodeWithMembers nodeWithMembers, DeclarationWithMembers? parentDeclaration = null, TypeDefinition? parentType = null)
         {
             foreach (var node in nodeWithMembers.Members)
                 if (node is EnumDeclarationNode enumDeclarationNode)
@@ -391,6 +468,8 @@ class CodeGeneration
                     WriteClassDeclarationNode(classDeclarationNode, parentDeclaration, parentType);
                 else if (node is FunctionDeclarationNode functionDeclarationNode)
                     WriteFunctionDeclarationNode(functionDeclarationNode, parentDeclaration, parentType);
+                else if (node is VariableDeclarationNode variableDeclarationNode)
+                    WriteVariableDeclarationNode(variableDeclarationNode, parentDeclaration, parentType);
                 else
                     throw new NotImplementedException();
         }

@@ -40,6 +40,7 @@ enum TokenType
     EnumKeyword,
     ClassKeyword,
     FunKeyword,
+    ReturnKeyword,
 
     Error = int.MaxValue
 }
@@ -57,7 +58,10 @@ record StringLiteralToken : Token
 }
 
 abstract record NumericLiteralToken(string Text, TokenType Type) : Token(Text, Type);
-record IntegerLiteralToken(string Text, long Value) : NumericLiteralToken(Text, TokenType.IntegerLiteral);
+record IntegerLiteralToken(string Text, long Value) : NumericLiteralToken(Text, TokenType.IntegerLiteral)
+{
+    public IntegerLiteralToken(long Value) : this(Value.ToString(), Value) { }
+}
 record DoubleLiteralToken(string Text, double Value) : NumericLiteralToken(Text, TokenType.DoubleLiteral);
 
 record IdentifierToken : Token
@@ -89,6 +93,7 @@ class Lexer
         ["enum"] = TokenType.EnumKeyword,
         ["class"] = TokenType.ClassKeyword,
         ["fun"] = TokenType.FunKeyword,
+        ["return"] = TokenType.ReturnKeyword,
     };
 
     readonly StringBuilder tokenSB = new();

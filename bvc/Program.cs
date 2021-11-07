@@ -9,10 +9,20 @@ class C(var a: Integer, var b: String, val c: Double, val arf: Arf) {
     fun F(x: Integer, y: Integer): Void {
         var fld: Integer;
         var fld2: Integer = (25 + 5) / 2 + -6;
+        var fld3 = 25 + 1;
+        var fld4 = 5 * 2.1;
     }
 
     fun Add(x: Double, y: Double): Double {
+        return 1.5;
     }
+
+    var meep = 10;
+    fun Meep() {
+        return 10;
+    }
+
+    fun CoolMeep() = 10;
 
     class IC {
         enum Meep { X }
