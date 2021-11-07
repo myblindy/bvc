@@ -18,6 +18,7 @@ abstract record ExpressionNode : Node;
 record BinaryExpressionNode(ExpressionNode Left, TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record UnaryExpressionNode(TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record LiteralExpressionNode(object Value) : ExpressionNode;
+record IdentifierExpressionNode(string Identifier) : ExpressionNode;
 record GroupingExpressionNode(ExpressionNode Expression) : ExpressionNode;
 abstract record StatementNode : Node;
 record ReturnStatementNode(ExpressionNode Expression) : StatementNode;
@@ -133,13 +134,16 @@ class Parser
                         classDeclarationNode.Members.Add(new FunctionDeclarationNode(FunctionDeclarationNode.PrimaryConstructorName, null, args.ToArray()));
                     }
 
-                    ExpectTokenTypes(TokenType.OpenBrace);
+                    if (MatchTokenTypes(TokenType.OpenBrace) != TokenType.Error)
+                    {
+                        ParseMembers(classDeclarationNode, MemberType.Class);
+                        ExpectTokenTypes(TokenType.CloseBrace);
+                    }
+                    else
+                        ExpectTokenTypes(TokenType.SemiColon);
 
-                    ParseMembers(classDeclarationNode, MemberType.Class);
                     node.Members.Add(classDeclarationNode);
-
                     foundAny = true;
-                    ExpectTokenTypes(TokenType.CloseBrace);
                 }
 
             // functions
@@ -325,6 +329,8 @@ class Parser
 
             return new GroupingExpressionNode(expr);
         }
+        else if (MatchTokenTypes(TokenType.Identifier) != TokenType.Error)
+            return new IdentifierExpressionNode(LastMatchedToken!.Text);
 
         throw new NotImplementedException();
     }
