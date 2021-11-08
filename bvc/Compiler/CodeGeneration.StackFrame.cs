@@ -47,9 +47,19 @@ partial class CodeGeneration
             while (true)
             {
                 foreach (var member in members.Select(w => w.member).OfType<FunctionMember>())
-                    // TODO overloading and argument checking
-                    if (member.Name == name && member.StackFrame.OfType<ParameterVariableMember>().Select(p => p.Type).SequenceEqual(parameters))
-                        return member;
+                    if (member.Name == name)
+                    {
+                        var parameterVariableMembers = member.StackFrame.OfType<ParameterVariableMember>().ToList();
+
+                        if (parameterVariableMembers.Count == parameters.Length)
+                        {
+                            bool ok = true;
+                            for (int idx = 0; idx < parameters.Length; ++idx)
+                                if (!parameterVariableMembers[idx].Type!.IsAssignableTo(parameters[idx])) { ok = false; break; }
+                            if (ok)
+                                return member;
+                        }
+                    }
                 return Parent?.FindFunction(name, parameters);
             }
         }

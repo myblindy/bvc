@@ -19,6 +19,7 @@ record BinaryExpressionNode(ExpressionNode Left, TokenType Operator, ExpressionN
 record UnaryExpressionNode(TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record LiteralExpressionNode(object Value) : ExpressionNode;
 record IdentifierExpressionNode(string Identifier) : ExpressionNode;
+record FunctionCallExpressionNode(string Name, ExpressionNode[] Arguments) : ExpressionNode;
 record GroupingExpressionNode(ExpressionNode Expression) : ExpressionNode;
 abstract record StatementNode : Node;
 record ReturnStatementNode(ExpressionNode Expression) : StatementNode;
@@ -330,7 +331,30 @@ class Parser
             return new GroupingExpressionNode(expr);
         }
         else if (MatchTokenTypes(TokenType.Identifier) != TokenType.Error)
-            return new IdentifierExpressionNode(LastMatchedToken!.Text);
+        {
+            var identifier = LastMatchedToken!.Text;
+            if (MatchTokenTypes(TokenType.OpenParentheses) != TokenType.Error)
+            {
+                // function call
+                var arguments = new List<ExpressionNode>();
+                if (MatchTokenTypes(TokenType.CloseParentheses) == TokenType.Error)
+                {
+                    while (true)
+                    {
+                        if (arguments.Count > 0 && MatchTokenTypes(TokenType.Comma) == TokenType.Error)
+                            break;
+
+                        var expr = ParseExpression();
+                        if (expr is null) break;
+                        arguments.Add(expr);
+                    }
+                    ExpectTokenTypes(TokenType.CloseParentheses);
+                }
+                return new FunctionCallExpressionNode(identifier, arguments.ToArray());
+            }
+            else
+                return new IdentifierExpressionNode(identifier);
+        }
 
         throw new NotImplementedException();
     }

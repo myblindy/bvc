@@ -30,6 +30,9 @@ class C(var a: Integer, var b: String, val c: Double, val arf: Arf, val d: D) {
 
     fun ShortMeep() = 10;
 
+    fun Fancy() = Add(ShortMeep(), Meep());
+    fun Fancy2() = Add(ShortAdd(1.0 / 2.0, 0.5), Meep());
+
     class IC {
         enum Meep { X }
     }

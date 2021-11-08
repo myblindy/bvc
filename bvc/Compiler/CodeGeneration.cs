@@ -67,7 +67,10 @@ partial class CodeGeneration
     }
     record VariableMember(TokenType? Modifier, string Name, TypeMember? Type, ExpressionNode? InitialValueExpression = null) : Member(Name);
     record ParameterVariableMember(TokenType Modifier, string Name, TypeMember? Type, ExpressionNode? InitialValueExpression = null) : Member(Name);
-    abstract record TypeMember(string Name) : Member(Name);
+    abstract record TypeMember(string Name) : Member(Name)
+    {
+        public bool IsAssignableTo(TypeMember x) => x == this || x.Name == "Integer" && Name == "Double";
+    }
     record EnumMember(string Name) : TypeMember(Name);
     record ClassMember(string Name) : TypeMember(Name);
 
@@ -132,6 +135,9 @@ partial class CodeGeneration
                         ParameterVariableMember parameterVariableMember => parameterVariableMember.Type!,
                         _ => throw new NotImplementedException(),
                     };
+
+                case FunctionCallExpressionNode functionCallExpressionNode:
+                    return stackFrame.FindFunction(functionCallExpressionNode.Name, functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray())!.ReturnType!;
             }
 
             throw new NotImplementedException();
@@ -447,6 +453,15 @@ partial class CodeGeneration
                     }
                     else
                         throw new NotImplementedException();
+                case FunctionCallExpressionNode functionCallExpressionNode:
+                    ilProcessor.Emit(OpCodes.Ldarg_0);
+                    foreach (var argument in functionCallExpressionNode.Arguments)
+                        WriteExpressionNode(argument, ilProcessor, stackFrame);
+                    var functionMember = stackFrame.FindFunction(functionCallExpressionNode.Name, functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray());
+                    if (functionMember is null) throw new NotImplementedException();
+                    ilProcessor.Emit(OpCodes.Call, (MethodReference)functionMember.StackFrame.MemberReference!);
+                    return functionMember.ReturnType;
+
                 default: throw new NotImplementedException();
             }
         }
