@@ -72,13 +72,17 @@ partial class CodeGeneration
         public bool IsAssignableTo(TypeMember x) => x == this || x.Name == "Integer" && Name == "Double";
     }
     record EnumMember(string Name) : TypeMember(Name);
-    record ClassMember(string Name) : TypeMember(Name);
+    record ClassMember(string Name) : TypeMember(Name)
+    {
+        public IEnumerable<FunctionMember> Constructors => StackFrame.OfType<FunctionMember>().Where(f => f.IsConstructor);
+    }
 
     record FunctionMember(string Name) : Member(Name)
     {
         public FunctionMember(string Name, TypeMember? returnType) : this(Name) =>
             ReturnType = returnType;
         public TypeMember? ReturnType { get; set; }
+        public bool IsConstructor { get; } = Name == ".ctor";
     }
 
     abstract record Statement() : Member((string?)null);
@@ -164,7 +168,9 @@ partial class CodeGeneration
 
         void ParseFunctionDeclarationNode(FunctionDeclarationNode functionDeclarationNode, StackFrame stackFrame)
         {
-            var functionDeclaration = new FunctionMember(functionDeclarationNode.Name, stackFrame.Find<TypeMember>(functionDeclarationNode.ReturnType));
+            var functionDeclaration = new FunctionMember(functionDeclarationNode.Name, functionDeclarationNode.IsPrimaryConstructor
+                ? (ClassMember)stackFrame.FindParentMember()!
+                : stackFrame.Find<TypeMember>(functionDeclarationNode.ReturnType));
             var functionStackFrame = stackFrame.Add(functionDeclaration);
             foreach (var arg in functionDeclarationNode.Arguments)
                 functionStackFrame.Add(new ParameterVariableMember(arg.Modifier, arg.Name, stackFrame.Find<TypeMember>(arg.Type)!));
@@ -265,7 +271,7 @@ partial class CodeGeneration
             var functionDefinition = new MethodDefinition(functionMember.Name,
                 MethodAttributes.Public | (functionDeclarationNode.IsPrimaryConstructor
                     ? MethodAttributes.HideBySig | MethodAttributes.RTSpecialName | MethodAttributes.SpecialName
-                    : 0), GetTypeReference(functionMember.ReturnType));
+                    : 0), GetTypeReference(functionDeclarationNode.IsPrimaryConstructor ? null : functionMember.ReturnType));
             functionMember.StackFrame.MemberReference = functionDefinition;
 
             // arguments
@@ -341,7 +347,8 @@ partial class CodeGeneration
                 foreach (var field in functionMember.StackFrame)
                     switch (field)
                     {
-                        case ParameterVariableMember: break;
+                        case ParameterVariableMember:
+                            break;
                         case VariableMember variableMember:
                             {
                                 var variableDefinition = new VariableDefinition(GetTypeReference(variableMember.Type));
@@ -454,12 +461,16 @@ partial class CodeGeneration
                     else
                         throw new NotImplementedException();
                 case FunctionCallExpressionNode functionCallExpressionNode:
-                    ilProcessor.Emit(OpCodes.Ldarg_0);
-                    foreach (var argument in functionCallExpressionNode.Arguments)
-                        WriteExpressionNode(argument, ilProcessor, stackFrame);
                     var functionMember = stackFrame.FindFunction(functionCallExpressionNode.Name, functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray());
                     if (functionMember is null) throw new NotImplementedException();
-                    ilProcessor.Emit(OpCodes.Call, (MethodReference)functionMember.StackFrame.MemberReference!);
+
+                    if (!functionMember.IsConstructor)
+                        ilProcessor.Emit(OpCodes.Ldarg_0);
+
+                    foreach (var argument in functionCallExpressionNode.Arguments)
+                        WriteExpressionNode(argument, ilProcessor, stackFrame);
+
+                    ilProcessor.Emit(functionMember.IsConstructor ? OpCodes.Newobj : OpCodes.Call, (MethodDefinition)functionMember.StackFrame.MemberReference!);
                     return functionMember.ReturnType;
 
                 default: throw new NotImplementedException();

@@ -5,7 +5,7 @@ using var stream = new StringStream(@"
 enum Meep { A, B, C, D = 10, E, F }
 enum Arf { A = 9, B = 4, D = 0 }
 
-class D;
+class D(val s: String);
 
 class C(var a: Integer, var b: String, val c: Double, val arf: Arf, val d: D) {
     fun F(x: Integer, y: Integer): Void {
@@ -20,18 +20,16 @@ class C(var a: Integer, var b: String, val c: Double, val arf: Arf, val d: D) {
     fun Add(x: Double, y: Double): Double {
         return x + y;
     }
-
     fun ShortAdd(x: Double, y: Double) = x + y;
 
     var meep = 10;
-    fun Meep() {
-        return 10;
-    }
-
+    fun Meep() { return 10; }
     fun ShortMeep() = 10;
 
     fun Fancy() = Add(ShortMeep(), Meep());
     fun Fancy2() = Add(ShortAdd(1.0 / 2.0, 0.5), Meep());
+
+    fun D() = D(""meep"");
 
     class IC {
         enum Meep { X }
