@@ -31,6 +31,7 @@ enum TokenType
     GreaterThanEqual,
     EqualsEquals,
     Not,
+    Dot,
 
     IfKeyword,
     TrueKeyword,
@@ -41,6 +42,8 @@ enum TokenType
     ClassKeyword,
     FunKeyword,
     ReturnKeyword,
+    GetKeyword,
+    SetKeyword,
 
     Error = int.MaxValue
 }
@@ -93,6 +96,8 @@ class Lexer
         ["enum"] = TokenType.EnumKeyword,
         ["class"] = TokenType.ClassKeyword,
         ["fun"] = TokenType.FunKeyword,
+        ["set"] = TokenType.SetKeyword,
+        ["get"] = TokenType.GetKeyword,
         ["return"] = TokenType.ReturnKeyword,
     };
 
@@ -148,6 +153,7 @@ class Lexer
                 case '/': return new SymbolToken(ch.ToString(), TokenType.Slash);
                 case ',': return new SymbolToken(ch.ToString(), TokenType.Comma);
                 case ':': return new SymbolToken(ch.ToString(), TokenType.Colon);
+                case '.': return new SymbolToken(ch.ToString(), TokenType.Dot);
                 case '<' or '>' or '=':
                     {
                         var nextCh = (char)reader.Peek();

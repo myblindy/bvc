@@ -8,18 +8,18 @@ abstract record NodeWithMembers : Node
 record RootNode : NodeWithMembers;
 record EnumDeclarationNode(string Name, (string Name, long? Value)[] Members) : Node;
 record ClassDeclarationNode(string Name) : NodeWithMembers;
-record FunctionDeclarationNode(string Name, string? ReturnType, (TokenType Modifier, string Name, string Type)[] Arguments) : NodeWithMembers
+record FunctionDeclarationNode(string Name, string? ReturnType, (TokenType Modifier, string Name, string Type)[] Arguments, bool Internal = false) : NodeWithMembers
 {
     public const string PrimaryConstructorName = ".ctor";
     public bool IsPrimaryConstructor => Name == PrimaryConstructorName;
 }
-record VariableDeclarationNode(string Name, string? ReturnType, ExpressionNode? InitialValueExpression) : Node;
+record VariableDeclarationNode(TokenType Modifier, string Name, string? ReturnType, ExpressionNode? InitialValueExpression, FunctionDeclarationNode? GetFunction) : Node;
 abstract record ExpressionNode : Node;
 record BinaryExpressionNode(ExpressionNode Left, TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record UnaryExpressionNode(TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record LiteralExpressionNode(object Value) : ExpressionNode;
 record IdentifierExpressionNode(string Identifier) : ExpressionNode;
-record FunctionCallExpressionNode(string Name, ExpressionNode[] Arguments) : ExpressionNode;
+record FunctionCallExpressionNode(ExpressionNode Expression, ExpressionNode[] Arguments) : ExpressionNode;
 record GroupingExpressionNode(ExpressionNode Expression) : ExpressionNode;
 abstract record StatementNode : Node;
 record ReturnStatementNode(ExpressionNode Expression) : StatementNode;
@@ -208,15 +208,43 @@ class Parser
                     ExpectTokenTypes(TokenType.Identifier);
                     type = LastMatchedToken!.Text;
                 }
+
                 ExpressionNode? initialValue = default;
-                if (MatchTokenTypes(TokenType.Equals) != TokenType.Error)
+                bool initialValueIsGet = false, needsSemiColon = true;
+                FunctionDeclarationNode? functionGet = default;
+                if (MatchTokenTypes(TokenType.GetKeyword) != TokenType.Error)
+                {
+                    if (MatchTokenTypes(TokenType.Equals) != TokenType.Error)
+                        (initialValue, initialValueIsGet) = (ParseExpression(), true);
+                    else if (MatchTokenTypes(TokenType.OpenBrace) != TokenType.Error)
+                    {
+                        ParseMembers(functionGet = new($"get_{name}", type, Array.Empty<(TokenType, string, string)>(), true), MemberType.Function);
+                        ExpectTokenTypes(TokenType.CloseBrace);
+                        needsSemiColon = false;
+                    }
+                    else
+                        throw new NotImplementedException();
+                }
+
+                if (initialValue is null && MatchTokenTypes(TokenType.Equals) != TokenType.Error)
                     initialValue = ParseExpression();
-                else if (type is null)
+
+                if (initialValue is null && type is null && functionGet is null)
                     throw new NotImplementedException();
-                ExpectTokenTypes(TokenType.SemiColon);
+
+                if (needsSemiColon)
+                    ExpectTokenTypes(TokenType.SemiColon);
 
                 foundAny = true;
-                node.Members.Add(new VariableDeclarationNode(name, type, initialValue));
+                if (functionGet is null && initialValue is not null && initialValueIsGet)
+                    functionGet = new($"get_{name}", type, Array.Empty<(TokenType, string, string)>(), true);
+
+                if (functionGet?.Members.Count == 0)
+                    functionGet.Members.Add(new ReturnStatementNode(initialValue!));
+                if (functionGet is not null)
+                    node.Members.Add(functionGet);
+
+                node.Members.Add(new VariableDeclarationNode(variableKindTokenType, name, type, initialValueIsGet ? null : initialValue, functionGet));
             }
 
             // return
@@ -332,7 +360,13 @@ class Parser
         }
         else if (MatchTokenTypes(TokenType.Identifier) != TokenType.Error)
         {
-            var identifier = LastMatchedToken!.Text;
+            ExpressionNode node = new IdentifierExpressionNode(LastMatchedToken!.Text);
+            while (MatchTokenTypes(TokenType.Dot) != TokenType.Error)
+            {
+                ExpectTokenTypes(TokenType.Identifier);
+                node = new BinaryExpressionNode(node, TokenType.Dot, new IdentifierExpressionNode(LastMatchedToken!.Text));
+            }
+
             if (MatchTokenTypes(TokenType.OpenParentheses) != TokenType.Error)
             {
                 // function call
@@ -350,10 +384,10 @@ class Parser
                     }
                     ExpectTokenTypes(TokenType.CloseParentheses);
                 }
-                return new FunctionCallExpressionNode(identifier, arguments.ToArray());
+                return new FunctionCallExpressionNode(node, arguments.ToArray());
             }
             else
-                return new IdentifierExpressionNode(identifier);
+                return node;
         }
 
         throw new NotImplementedException();

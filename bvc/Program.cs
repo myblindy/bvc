@@ -31,6 +31,15 @@ class C(var a: Integer, var b: String, val c: Double, val arf: Arf, val d: D) {
 
     fun D() = D(""meep"");
 
+    fun DNameFn() = d.s;
+    val DNameVal = d.s;
+    val DNameGet get = d.s;
+
+    val P get {
+        val a = 10 / 2;
+        return a * a;
+    }
+
     class IC {
         enum Meep { X }
     }
