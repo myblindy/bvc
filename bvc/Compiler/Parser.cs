@@ -7,18 +7,18 @@ abstract record NodeWithMembers : Node
 }
 record RootNode : NodeWithMembers;
 record EnumDeclarationNode(string Name, (string Name, long? Value)[] Members) : Node;
-record ClassDeclarationNode(string Name) : NodeWithMembers;
-record FunctionDeclarationNode(string Name, string? ReturnType, (TokenType Modifier, string Name, string Type)[] Arguments, bool Internal = false) : NodeWithMembers
+record ClassDeclarationNode(string Name, string[]? GenericTypes = null) : NodeWithMembers;
+record FunctionDeclarationNode(string Name, IdentifierExpressionNode? ReturnType, (TokenType Modifier, string Name, string Type)[] Arguments, bool Internal = false) : NodeWithMembers
 {
     public const string PrimaryConstructorName = ".ctor";
     public bool IsPrimaryConstructor => Name == PrimaryConstructorName;
 }
-record VariableDeclarationNode(TokenType Modifier, string Name, string? ReturnType, ExpressionNode? InitialValueExpression, FunctionDeclarationNode? GetFunction) : Node;
+record VariableDeclarationNode(TokenType Modifier, string Name, IdentifierExpressionNode? ReturnType, ExpressionNode? InitialValueExpression, FunctionDeclarationNode? GetFunction) : Node;
 abstract record ExpressionNode : Node;
 record BinaryExpressionNode(ExpressionNode Left, TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record UnaryExpressionNode(TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record LiteralExpressionNode(object Value) : ExpressionNode;
-record IdentifierExpressionNode(string Identifier) : ExpressionNode;
+record IdentifierExpressionNode(string Identifier, ExpressionNode[]? GenericParameters = null) : ExpressionNode;
 record FunctionCallExpressionNode(ExpressionNode Expression, ExpressionNode[] Arguments) : ExpressionNode;
 record GroupingExpressionNode(ExpressionNode Expression) : ExpressionNode;
 abstract record StatementNode : Node;
@@ -171,12 +171,9 @@ class Parser
                 }
                 ExpectTokenTypes(TokenType.CloseParentheses);
 
-                string? returnType = null;
+                IdentifierExpressionNode? returnType = null;
                 if (MatchTokenTypes(TokenType.Colon) != TokenType.Error)
-                {
-                    ExpectTokenTypes(TokenType.Identifier);
-                    returnType = LastMatchedToken!.Text;
-                }
+                    returnType = (IdentifierExpressionNode)ParseExpression()!;
 
                 var functionDeclarationNode = new FunctionDeclarationNode(name, returnType, args.ToArray());
 
@@ -202,11 +199,10 @@ class Parser
             {
                 ExpectTokenTypes(TokenType.Identifier);
                 var name = LastMatchedToken!.Text;
-                string? type = null;
+                IdentifierExpressionNode? type = null;
                 if (MatchTokenTypes(TokenType.Colon) != TokenType.Error)
                 {
-                    ExpectTokenTypes(TokenType.Identifier);
-                    type = LastMatchedToken!.Text;
+                    type = (IdentifierExpressionNode)ParseExpression()!;
                 }
 
                 ExpressionNode? initialValue = default;
@@ -360,7 +356,7 @@ class Parser
         }
         else if (MatchTokenTypes(TokenType.Identifier) != TokenType.Error)
         {
-            ExpressionNode node = new IdentifierExpressionNode(LastMatchedToken!.Text);
+            ExpressionNode node = ParseIdentifierExpressionNode(true)!;
             while (MatchTokenTypes(TokenType.Dot) != TokenType.Error)
             {
                 ExpectTokenTypes(TokenType.Identifier);
@@ -391,6 +387,48 @@ class Parser
         }
 
         throw new NotImplementedException();
+    }
+
+    IdentifierExpressionNode? ParseIdentifierExpressionNode(bool identifierMatched = false)
+    {
+        if (!identifierMatched && MatchTokenTypes(TokenType.Identifier) == TokenType.Error)
+            return null;
+
+        var id = LastMatchedToken!.Text;
+        var genericExpressions = new List<ExpressionNode>();
+
+        // start a transaction at <
+        var transaction = lexer.StartTransaction();
+        try
+        {
+            // try to match a generic list
+            if (MatchTokenTypes(TokenType.LessThan) != TokenType.Error)
+            {
+                var expr = ParsePrimaryExpression();
+                if (expr is null) return new(id);
+                genericExpressions.Add(expr);
+
+                while (MatchTokenTypes(TokenType.Comma) != TokenType.Error)
+                {
+                    expr = ParsePrimaryExpression();
+                    if (expr is null) return new(id);
+                    genericExpressions.Add(expr);
+                }
+
+                if (MatchTokenTypes(TokenType.GreaterThan) != TokenType.Error)
+                {
+                    // good case
+                    transaction?.Commit();
+                    return new(id, genericExpressions.ToArray());
+                }
+            }
+        }
+        finally
+        {
+            transaction?.Reset();
+        }
+
+        return new(id);
     }
     #endregion
 }

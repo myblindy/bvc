@@ -44,6 +44,7 @@ enum TokenType
     ReturnKeyword,
     GetKeyword,
     SetKeyword,
+    VarArgKeyword,
 
     Error = int.MaxValue
 }
@@ -81,10 +82,30 @@ record KeywordToken : Token
 class Lexer
 {
     private readonly StreamReader reader;
-    private readonly Queue<Token> previewTokens = new();
+    private readonly List<Token> previewTokens = new();
+    Transaction? transaction;
 
     public Lexer(Stream stream) =>
         reader = new(stream, Encoding.Unicode);
+
+    public class Transaction
+    {
+        readonly Lexer lexer;
+        List<Token>? tokens = new();
+        public Transaction(Lexer lexer) => this.lexer = lexer;
+
+        public void Add(Token token) => tokens?.Add(token);
+        public void AddRange(IEnumerable<Token> token) => tokens?.AddRange(token);
+
+        public void Reset()
+        {
+            if (tokens is not null)
+                lexer.previewTokens.InsertRange(0, Enumerable.Reverse(tokens));
+            Commit();
+        }
+
+        public void Commit() => (lexer.transaction, tokens) = (null, null);
+    }
 
     static readonly Dictionary<string, TokenType> keywords = new()
     {
@@ -99,7 +120,10 @@ class Lexer
         ["set"] = TokenType.SetKeyword,
         ["get"] = TokenType.GetKeyword,
         ["return"] = TokenType.ReturnKeyword,
+        ["vararg"] = TokenType.VarArgKeyword,
     };
+
+    public Transaction? StartTransaction() => transaction is null ? transaction = new(this) : null;
 
     readonly StringBuilder tokenSB = new();
     Token? GetNextToken()
@@ -227,6 +251,7 @@ class Lexer
         if (n >= previewTokens.Count)
         {
             n -= previewTokens.Count;
+            transaction?.AddRange(previewTokens);
             previewTokens.Clear();
 
             Token? token = default;
@@ -236,7 +261,12 @@ class Lexer
         else
         {
             Token? token = default;
-            while (n-- >= 0) token = previewTokens.Dequeue();
+            while (n-- >= 0)
+            {
+                token = previewTokens[0];
+                previewTokens.RemoveAt(0);
+                transaction?.Add(token);
+            }
             return token;
         }
     }
@@ -248,12 +278,12 @@ class Lexer
             n -= previewTokens.Count;
 
             Token? token = default;
-            while (n-- >= 0) { token = GetNextToken(); if (token is null) return null; previewTokens.Enqueue(token); }
+            while (n-- >= 0) { token = GetNextToken(); if (token is null) return null; previewTokens.Add(token); }
             return token;
         }
         else if (n == 0)
-            return previewTokens.Peek();
+            return previewTokens[0];
         else
-            return previewTokens.ElementAt(n);
+            return previewTokens[n];
     }
 }

@@ -8,6 +8,14 @@ enum Arf { A = 9, B = 4, D = 0 }
 class D(val s: String);
 
 class C(var a: Integer, var b: String, val c: Double, val arf: Arf, val d: D) {
+    fun Lst() {
+        val lst0 = List<Integer>();
+        val lst1 = List<Integer>(1);
+        val lst2 = List<Integer>(1, 2);
+        val lst3 = List<Integer>(1, 2, 3);
+        val lst4 = List<Integer>(1, 2, 3, 4);
+    }
+
     fun F(x: Integer, y: Integer): Void {
         var fld: Integer;
         var fld2: Integer = (25 + 5) / 2 + -6;
@@ -36,8 +44,8 @@ class C(var a: Integer, var b: String, val c: Double, val arf: Arf, val d: D) {
     val DNameGet get = d.s;
 
     val P get {
-        val a = 10 / 2;
-        return a * a;
+        val c = 10 / 2;
+        return a * a + c * c;
     }
 
     class IC {
@@ -50,6 +58,5 @@ var lexer = new Lexer(stream);
 var parser = new Parser(lexer);
 var rootNode = parser.Parse();
 
-var codeGen = new CodeGeneration(rootNode!);
 using var outputStream = File.OpenWrite("out.dll");
-codeGen.Write(outputStream, "out");
+CodeGeneration.Generate(rootNode!, outputStream, "out");

@@ -1,7 +1,9 @@
 ﻿using Mono.Cecil;
+using Mono.Cecil.Rocks;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Linq;
 using System.Text;
@@ -17,9 +19,32 @@ partial class CodeGeneration
         public StackFrame? Parent { get; }
         public StackFrame(StackFrame? parent) => Parent = parent;
 
-        public object? MemberReference { get; set; }
+        readonly List<StackFrame> relatedStackFrames = new();
+        public object? MemberReference { get; private set; }
+        public void SetMemberReference(object? newMemberReference, StackFrame stackFrame)
+        {
+            MemberReference = newMemberReference;
+            foreach (var s in relatedStackFrames)
+                if (s.GenericTypeMembers?.Length > 0)
+                    s.MemberReference = newMemberReference switch
+                    {
+                        TypeDefinition typeDefinition => typeDefinition.MakeGenericInstanceType(s.GenericTypeMembers.Select(t => (TypeReference)t.StackFrame.MemberReference!).ToArray()),
+                        _ => throw new NotImplementedException()
+                    };
+                else
+                    s.MemberReference = newMemberReference;
+        }
+        public TypeMember[]? GenericTypeMembers { get; set; }
 
         readonly List<(Member member, StackFrame stackFrame)> members = new();
+
+        public StackFrame NewRelatedFrameWith(TypeMember[]? genericTypeMembers)
+        {
+            var newStackFrame = new StackFrame(Parent) { GenericTypeMembers = genericTypeMembers };
+            newStackFrame.members.AddRange(members);
+            relatedStackFrames.Add(newStackFrame);
+            return newStackFrame;
+        }
 
         public IEnumerator<Member> GetEnumerator() => members.Select(w => w.member).GetEnumerator();
 
@@ -27,8 +52,7 @@ partial class CodeGeneration
 
         public StackFrame Add(Member member, MemberReference? memberReference = null)
         {
-            MemberReference = memberReference;
-            StackFrame newStackFrame = new(this);
+            StackFrame newStackFrame = new(this) { MemberReference = memberReference };
             members.Add((member, newStackFrame));
             return member.StackFrame = newStackFrame;
         }
@@ -64,23 +88,31 @@ partial class CodeGeneration
 
         public IEnumerable<ParameterVariableMember> Parameters => this.OfType<ParameterVariableMember>();
 
-        public (StackFrame Get, StackFrame Set) AccessorFrames => (Parent!.FindFunction($"get_{FindParentMember()!.Name!}", Array.Empty<TypeMember>(), false)!.StackFrame, null!);
+        public (StackFrame Get, StackFrame Set) AccessorFrames => (Parent!.FindFunction($"get_{FindParentMember()!.Name!}", Array.Empty<TypeMember>(), Array.Empty<TypeMember>(), false)!.StackFrame, null!);
 
-        public FunctionMember? FindFunction(string name, TypeMember[] parameters, bool recurse = true)
+        public FunctionMember? FindFunction(string name, TypeMember[]? genericParameters, TypeMember[] parameters, bool recurse = true)
         {
             bool TestFunctionMember(FunctionMember member)
             {
                 var parameterVariableMembers = member.StackFrame.Parameters.ToList();
 
-                if (parameterVariableMembers.Count == parameters.Length)
-                {
-                    bool ok = true;
-                    for (int idx = 0; idx < parameters.Length; ++idx)
-                        if (!parameterVariableMembers[idx].Type!.IsAssignableTo(parameters[idx])) { ok = false; break; }
-                    if (ok) return true;
-                }
+                int pvmIdx = 0, pIdx = 0;
+                for (; pvmIdx < parameterVariableMembers.Count; ++pvmIdx, ++pIdx)
+                    if (parameterVariableMembers[pvmIdx].Modifier == TokenType.VarArgKeyword)
+                    {
+                        var destType = parameterVariableMembers[pvmIdx].Type! switch
+                        {
+                            GenericTypeMember genericTypeMember when genericParameters is not null => genericParameters[this.OfType<GenericTypeMember>().TakeWhile(w => w.Name != genericTypeMember.Name).Count()]!,
+                            _ => parameterVariableMembers[pvmIdx].Type!
+                        };
 
-                return false;
+                        while (pIdx < parameters.Length && parameters[pIdx].IsAssignableTo(destType)) ++pIdx;
+                        --pIdx;
+                    }
+                    else if (!parameterVariableMembers[pvmIdx].Type!.IsAssignableTo(parameters[pIdx]))
+                        return false;
+
+                return pvmIdx == parameterVariableMembers.Count && pIdx == parameters.Length;
             }
 
             while (true)
@@ -94,24 +126,31 @@ partial class CodeGeneration
                             if (TestFunctionMember(constructorMember))
                                 return constructorMember;
                 }
-                return recurse ? Parent?.FindFunction(name, parameters, recurse) : null;
+                return recurse ? Parent?.FindFunction(name, genericParameters, parameters, recurse) : null;
             }
         }
 
         public FunctionMember? FindFunction(ExpressionNode expression, TypeMember[] parameters)
         {
-            static Member? internalFindFunction(ExpressionNode expression, TypeMember[] parameters, StackFrame stackFrame, bool recurse, int level = 0)
+            var genericParameters = (expression switch
+            {
+                IdentifierExpressionNode identifierExpression => identifierExpression.GenericParameters ?? Array.Empty<ExpressionNode>(),
+                BinaryExpressionNode binaryExpressionNode => ((IdentifierExpressionNode)binaryExpressionNode.Right).GenericParameters ?? Array.Empty<ExpressionNode>(),
+                _ => throw new NotImplementedException()
+            }).Select(w => Find<TypeMember>(w)!).ToArray();
+
+            Member? internalFindFunction(ExpressionNode expression, TypeMember[] parameters, StackFrame stackFrame, bool recurse, int level = 0)
             {
                 if (expression is IdentifierExpressionNode identifierExpression)
                     return level == 0
-                        ? stackFrame.FindFunction(identifierExpression.Identifier, parameters, true)
+                        ? stackFrame.FindFunction(identifierExpression.Identifier, genericParameters, parameters, true)
                         : stackFrame.Find<Member>(identifierExpression.Identifier);
                 else if (expression is BinaryExpressionNode binaryExpressionNode && binaryExpressionNode.Operator == TokenType.Dot)
                 {
                     var leftMember = internalFindFunction(binaryExpressionNode.Left, parameters, stackFrame, true, level + 1);
                     if (leftMember is null) return null;
                     var rightMember = level == 0
-                        ? leftMember.StackFrame.FindFunction(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier, parameters, false)
+                        ? leftMember.StackFrame.FindFunction(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier, genericParameters, parameters, false)
                         : leftMember.StackFrame.Find<Member>(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier, false);
                     return rightMember;
                 }
