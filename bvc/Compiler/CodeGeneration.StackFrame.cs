@@ -14,7 +14,7 @@ namespace bvc.Compiler;
 
 partial class CodeGeneration
 {
-    class StackFrame : IEnumerable<Member>
+    internal class StackFrame : IEnumerable<Member>
     {
         public StackFrame? Parent { get; }
         public StackFrame(StackFrame? parent) => Parent = parent;
@@ -88,21 +88,57 @@ partial class CodeGeneration
 
         public IEnumerable<ParameterVariableMember> Parameters => this.OfType<ParameterVariableMember>();
 
-        public (StackFrame Get, StackFrame Set) AccessorFrames => (Parent!.FindFunction($"get_{FindParentMember()!.Name!}", Array.Empty<TypeMember>(), Array.Empty<TypeMember>(), false)!.StackFrame, null!);
+        public (StackFrame Get, StackFrame Set) AccessorFrames => (Parent!.FindFunction($"get_{FindParentMember()!.Name!}", Array.Empty<TypeMember>(), out _, Array.Empty<TypeMember>(), false)!.StackFrame, null!);
 
-        public FunctionMember? FindFunction(string name, TypeMember[]? genericParameters, TypeMember[] parameters, bool recurse = true)
+        public FunctionMember? FindFunction(string name, TypeMember[]? genericParameters, out IEnumerable<TypeMember>? inferredGenericParameters, TypeMember[] parameters, bool recurse = true)
         {
-            bool TestFunctionMember(FunctionMember member)
+            (bool success, IEnumerable<TypeMember>? inferredGenericParameters) TestFunctionMember(FunctionMember member)
             {
                 var parameterVariableMembers = member.StackFrame.Parameters.ToList();
+                var allGenericParameters = genericParameters?.ToList() ?? new();
+                var genericMembers = member.StackFrame.Parent?.OfType<GenericTypeMember>().ToList() ?? new();
 
+                int getGenericMemberIndex(GenericTypeMember genericTypeMember) =>
+                    genericMembers.TakeWhile(w => w.Name != genericTypeMember.Name).Count();
+
+                // try to infer all needed generic parameters
                 int pvmIdx = 0, pIdx = 0;
+                if (allGenericParameters.Count < genericMembers.Count)
+                {
+                    for (; pvmIdx < parameterVariableMembers.Count; ++pvmIdx, ++pIdx)
+                        if (parameterVariableMembers[pvmIdx].Modifier == TokenType.VarArgKeyword)
+                        {
+                            // infer the type
+                            var destType = parameterVariableMembers[pvmIdx].Type!;
+                            if (destType is GenericTypeMember genericTypeMember)
+                            {
+                                var genericMemberIndex = getGenericMemberIndex(genericTypeMember);
+                                if (allGenericParameters.Count <= genericMemberIndex || allGenericParameters[genericMemberIndex] is null)
+                                {
+                                    while (allGenericParameters.Count <= genericMemberIndex)
+                                        allGenericParameters.Add(null);
+                                    destType = allGenericParameters[genericMemberIndex] = parameters[pIdx];
+                                }
+                            }
+
+                            // eat parameters
+                            while (pIdx < parameters.Length && parameters[pIdx].IsAssignableTo(destType)) ++pIdx;
+                            --pIdx;
+                        }
+                        else if (!parameterVariableMembers[pvmIdx].Type!.IsAssignableTo(parameters[pIdx]))
+                            return (false, null);
+
+                    return (pvmIdx == parameterVariableMembers.Count && pIdx == parameters.Length, allGenericParameters);
+                }
+
+                // no inference needed here
+                (pvmIdx, pIdx) = (0, 0);
                 for (; pvmIdx < parameterVariableMembers.Count; ++pvmIdx, ++pIdx)
                     if (parameterVariableMembers[pvmIdx].Modifier == TokenType.VarArgKeyword)
                     {
                         var destType = parameterVariableMembers[pvmIdx].Type! switch
                         {
-                            GenericTypeMember genericTypeMember when genericParameters is not null => genericParameters[this.OfType<GenericTypeMember>().TakeWhile(w => w.Name != genericTypeMember.Name).Count()]!,
+                            GenericTypeMember genericTypeMember when genericParameters is not null => allGenericParameters[genericMembers.TakeWhile(w => w.Name != genericTypeMember.Name).Count()]!,
                             _ => parameterVariableMembers[pvmIdx].Type!
                         };
 
@@ -110,27 +146,35 @@ partial class CodeGeneration
                         --pIdx;
                     }
                     else if (!parameterVariableMembers[pvmIdx].Type!.IsAssignableTo(parameters[pIdx]))
-                        return false;
+                        return (false, null);
 
-                return pvmIdx == parameterVariableMembers.Count && pIdx == parameters.Length;
+                return (pvmIdx == parameterVariableMembers.Count && pIdx == parameters.Length, null);
             }
 
             while (true)
             {
                 foreach (var member in members.Select(w => w.member))
                 {
-                    if (member is FunctionMember functionMember && functionMember.Name == name && TestFunctionMember(functionMember))
+                    if (member is FunctionMember functionMember && functionMember.Name == name && TestFunctionMember(functionMember) is (true, var newInferredGenericParameters))
+                    {
+                        inferredGenericParameters = newInferredGenericParameters;
                         return functionMember;
+                    }
                     else if (member is ClassMember classMember && classMember.Name == name)
                         foreach (var constructorMember in classMember.Constructors)
-                            if (TestFunctionMember(constructorMember))
+                            if (TestFunctionMember(constructorMember) is (true, var newInferredGenericParameters2))
+                            {
+                                inferredGenericParameters = newInferredGenericParameters2;
                                 return constructorMember;
+                            }
                 }
-                return recurse ? Parent?.FindFunction(name, genericParameters, parameters, recurse) : null;
+
+                inferredGenericParameters = null;
+                return recurse ? Parent?.FindFunction(name, genericParameters, out inferredGenericParameters, parameters, recurse) : null;
             }
         }
 
-        public FunctionMember? FindFunction(ExpressionNode expression, TypeMember[] parameters)
+        public FunctionMember? FindFunction(ExpressionNode expression, out IEnumerable<TypeMember>? inferredGenericParameters, TypeMember[] parameters)
         {
             var genericParameters = (expression switch
             {
@@ -139,24 +183,28 @@ partial class CodeGeneration
                 _ => throw new NotImplementedException()
             }).Select(w => Find<TypeMember>(w)!).ToArray();
 
-            Member? internalFindFunction(ExpressionNode expression, TypeMember[] parameters, StackFrame stackFrame, bool recurse, int level = 0)
+            Member? internalFindFunction(ExpressionNode expression, out IEnumerable<TypeMember>? newInferredGenericParameters, TypeMember[] parameters, StackFrame stackFrame, bool recurse, int level = 0)
             {
                 if (expression is IdentifierExpressionNode identifierExpression)
+                {
+                    newInferredGenericParameters = null;
                     return level == 0
-                        ? stackFrame.FindFunction(identifierExpression.Identifier, genericParameters, parameters, true)
+                        ? stackFrame.FindFunction(identifierExpression.Identifier, genericParameters, out newInferredGenericParameters, parameters, true)
                         : stackFrame.Find<Member>(identifierExpression.Identifier);
+                }
                 else if (expression is BinaryExpressionNode binaryExpressionNode && binaryExpressionNode.Operator == TokenType.Dot)
                 {
-                    var leftMember = internalFindFunction(binaryExpressionNode.Left, parameters, stackFrame, true, level + 1);
+                    var leftMember = internalFindFunction(binaryExpressionNode.Left, out newInferredGenericParameters, parameters, stackFrame, true, level + 1);
                     if (leftMember is null) return null;
                     var rightMember = level == 0
-                        ? leftMember.StackFrame.FindFunction(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier, genericParameters, parameters, false)
+                        ? leftMember.StackFrame.FindFunction(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier, genericParameters, out newInferredGenericParameters, parameters, false)
                         : leftMember.StackFrame.Find<Member>(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier, false);
                     return rightMember;
                 }
+                newInferredGenericParameters = null;
                 return null;
             }
-            return internalFindFunction(expression, parameters, this, true) as FunctionMember;
+            return internalFindFunction(expression, out inferredGenericParameters, parameters, this, true) as FunctionMember;
         }
 
         public Member? FindParentMember() => Parent?.members.FirstOrDefault(w => w.stackFrame == this).member;

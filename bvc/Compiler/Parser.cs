@@ -18,7 +18,10 @@ abstract record ExpressionNode : Node;
 record BinaryExpressionNode(ExpressionNode Left, TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record UnaryExpressionNode(TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record LiteralExpressionNode(object Value) : ExpressionNode;
-record IdentifierExpressionNode(string Identifier, ExpressionNode[]? GenericParameters = null) : ExpressionNode;
+record IdentifierExpressionNode(string Identifier, ExpressionNode[]? GenericParameters = null) : ExpressionNode
+{
+    public CodeGeneration.TypeMember[]? InferredGenericParameters { get; set; }
+}
 record FunctionCallExpressionNode(ExpressionNode Expression, ExpressionNode[] Arguments) : ExpressionNode;
 record GroupingExpressionNode(ExpressionNode Expression) : ExpressionNode;
 abstract record StatementNode : Node;

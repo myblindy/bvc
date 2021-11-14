@@ -10,10 +10,10 @@ class D(val s: String);
 class C(var a: Integer, var b: String, val c: Double, val arf: Arf, val d: D) {
     fun Lst() {
         val lst0 = List<Integer>();
-        val lst1 = List<Integer>(1);
-        val lst2 = List<Integer>(1, 2);
-        val lst3 = List<Integer>(1, 2, 3);
-        val lst4 = List<Integer>(1, 2, 3, 4);
+        val lst1 = List(1);
+        val lst2 = List(1, 2);
+        val lst3 = List(1, 2, 3);
+        val lst4 = List(1, 2, 3, 4);
     }
 
     fun F(x: Integer, y: Integer): Void {

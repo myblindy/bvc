@@ -101,7 +101,7 @@ static partial class CodeGeneration
                             };
                         var rightTypeField = ParseExpressionNodeTypeField(binaryExpressionNode.Right, stackFrame);
                         var fnName = TokenTypeToOperatorName(binaryExpressionNode.Operator);
-                        return leftTypeField.StackFrame.FindFunction(fnName, Array.Empty<TypeMember>(), new[] { rightTypeField })!.ReturnType!;
+                        return leftTypeField.StackFrame.FindFunction(fnName, Array.Empty<TypeMember>(), out _, new[] { rightTypeField })!.ReturnType!;
                     }
 
                 case GroupingExpressionNode groupingExpressionNode:
@@ -116,7 +116,10 @@ static partial class CodeGeneration
                     };
 
                 case FunctionCallExpressionNode functionCallExpressionNode:
-                    var returnType = stackFrame.FindFunction(functionCallExpressionNode.Expression, functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray())!.ReturnType!;
+                    var returnType = stackFrame.FindFunction(functionCallExpressionNode.Expression, out var inferredGenericParameters,
+                        functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray())!.ReturnType!;
+                    if (inferredGenericParameters is not null && functionCallExpressionNode.Expression is IdentifierExpressionNode identifierExpressionNode2)
+                        identifierExpressionNode2.InferredGenericParameters = inferredGenericParameters.ToArray();
                     return returnType.AsGeneric(functionCallExpressionNode.Expression, stackFrame);
             }
 
@@ -182,7 +185,7 @@ static partial class CodeGeneration
         {
             var varTypeField = stackFrame.Find<TypeMember>(variableDeclarationNode.ReturnType);
             var inferredVarTypeField = variableDeclarationNode.InitialValueExpression is null && variableDeclarationNode.GetFunction is not null
-                ? stackFrame.FindFunction(variableDeclarationNode.GetFunction.Name, variableDeclarationNode.ReturnType?.GenericParameters?.Select(w => stackFrame.Find<TypeMember>(w)!).ToArray() ?? Array.Empty<TypeMember>(),
+                ? stackFrame.FindFunction(variableDeclarationNode.GetFunction.Name, variableDeclarationNode.ReturnType?.GenericParameters?.Select(w => stackFrame.Find<TypeMember>(w)!).ToArray(), out _,
                     Array.Empty<TypeMember>(), false)!.ReturnType
                 : variableDeclarationNode.InitialValueExpression is null ? null : ParseExpressionNodeTypeField(variableDeclarationNode.InitialValueExpression!, stackFrame);
 
@@ -298,7 +301,7 @@ static partial class CodeGeneration
         {
             if (functionDeclarationNode.Internal) return;
 
-            var functionMember = stackFrame.FindFunction(functionDeclarationNode.Name, stackFrame.GenericTypeMembers,
+            var functionMember = stackFrame.FindFunction(functionDeclarationNode.Name, stackFrame.GenericTypeMembers, out _,
                 functionDeclarationNode.Arguments.Select(a => stackFrame.Find<TypeMember>(a.Type)!).ToArray())!;
             var functionDefinition = new MethodDefinition(functionMember.Name,
                 MethodAttributes.Public | (functionDeclarationNode.IsPrimaryConstructor
@@ -449,7 +452,7 @@ static partial class CodeGeneration
                         });
 
                         var fnName = TokenTypeToOperatorName(binaryExpressionNode.Operator);
-                        return leftTypeField!.StackFrame.FindFunction(fnName, Array.Empty<TypeMember>(), new[] { rightTypeField! })!.ReturnType!;
+                        return leftTypeField!.StackFrame.FindFunction(fnName, null, out _, new[] { rightTypeField! })!.ReturnType!;
                     }
                 case IdentifierExpressionNode identifierExpressionNode:
                     {
@@ -476,7 +479,7 @@ static partial class CodeGeneration
                             throw new NotImplementedException();
                     }
                 case FunctionCallExpressionNode functionCallExpressionNode:
-                    var functionMember = stackFrame.FindFunction(functionCallExpressionNode.Expression, functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray());
+                    var functionMember = stackFrame.FindFunction(functionCallExpressionNode.Expression, out var inferredGenericParameters, functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray());
                     if (functionMember is null) throw new NotImplementedException();
 
                     if (!functionMember.IsConstructor)
@@ -490,8 +493,9 @@ static partial class CodeGeneration
                         {
                             HasThis = methodReference.HasThis,
                             ExplicitThis = methodReference.ExplicitThis,
-                            DeclaringType = ((TypeDefinition)classMember.StackFrame.MemberReference!).MakeGenericInstanceType(
-                                ((IdentifierExpressionNode)functionCallExpressionNode.Expression).GenericParameters!.Select(p => (TypeReference)stackFrame.Find<TypeMember>(p)!.StackFrame.MemberReference!).ToArray()),
+                            DeclaringType = ((TypeDefinition)classMember.StackFrame.MemberReference!).MakeGenericInstanceType(inferredGenericParameters is null
+                                ? ((IdentifierExpressionNode)functionCallExpressionNode.Expression).GenericParameters!.Select(p => (TypeReference)stackFrame.Find<TypeMember>(p)!.StackFrame.MemberReference!).ToArray()
+                                : inferredGenericParameters.Select(t => (TypeReference)t.StackFrame.MemberReference!).ToArray()),
                             CallingConvention = methodReference.CallingConvention,
                         };
                         foreach (var parameterDefinition in methodReference.Parameters)
@@ -508,8 +512,10 @@ static partial class CodeGeneration
                             // if a generic parameter, get the real type instead
                             var destType = parameter.Type! switch
                             {
-                                GenericTypeMember genericTypeMember => (TypeMember)stackFrame.Find<TypeMember>(((IdentifierExpressionNode)functionCallExpressionNode.Expression)
-                                    .GenericParameters![classMember.StackFrame.OfType<GenericTypeMember>().TakeWhile(w => w.Name != genericTypeMember.Name).Count()])!,
+                                GenericTypeMember genericTypeMember => ((IdentifierExpressionNode)functionCallExpressionNode.Expression).InferredGenericParameters is { } foundInferredGenericParameters
+                                    ? foundInferredGenericParameters[classMember.StackFrame.OfType<GenericTypeMember>().TakeWhile(w => w.Name != genericTypeMember.Name).Count()]
+                                    : stackFrame.Find<TypeMember>(((IdentifierExpressionNode)functionCallExpressionNode.Expression)
+                                        .GenericParameters![classMember.StackFrame.OfType<GenericTypeMember>().TakeWhile(w => w.Name != genericTypeMember.Name).Count()])!,
                                 EnumMember or ClassMember => parameter.Type!,
                                 _ => throw new NotImplementedException()
                             };
@@ -622,13 +628,13 @@ static partial class CodeGeneration
         VarArgs = Val << 1,
     }
 
-    abstract record Member(string? Name)
+    internal abstract record Member(string? Name)
     {
         public StackFrame StackFrame { get; set; }
     }
     record VariableMember(TokenType Modifier, string Name, TypeMember? Type, ExpressionNode? InitialValueExpression = null, FunctionDeclarationNode? GetFunction = null) : Member(Name);
-    record ParameterVariableMember(TokenType Modifier, string Name, TypeMember? Type, ExpressionNode? InitialValueExpression = null) : Member(Name);
-    abstract record TypeMember(string Name) : Member(Name)
+    internal record ParameterVariableMember(TokenType Modifier, string Name, TypeMember? Type, ExpressionNode? InitialValueExpression = null) : Member(Name);
+    internal abstract record TypeMember(string Name) : Member(Name)
     {
         public bool IsAssignableTo(TypeMember x) => x == this || x.Name == "Integer" && Name == "Double";
 
@@ -653,12 +659,13 @@ static partial class CodeGeneration
         {
             if (expression is null) return this;
 
-            var genericTypes = ((expression switch
+            TypeMember[] getGenericTypeMembers(IdentifierExpressionNode i) => i.InferredGenericParameters ?? i.GenericParameters?.Select(e => stackFrame.Find<TypeMember>(e)!).ToArray() ?? Array.Empty<TypeMember>();
+            var genericTypes = expression switch
             {
-                IdentifierExpressionNode i => i.GenericParameters,
-                BinaryExpressionNode b => ((IdentifierExpressionNode)b.Right).GenericParameters,
+                IdentifierExpressionNode i => getGenericTypeMembers(i),
+                BinaryExpressionNode b => getGenericTypeMembers((IdentifierExpressionNode)b.Right),
                 _ => throw new NotImplementedException()
-            }) ?? Array.Empty<ExpressionNode>()).Select(e => stackFrame.Find<TypeMember>(e)!).ToArray();
+            };
 
             TypeMember? genericType;
             if (genericTypes.Length == 0)
@@ -678,7 +685,7 @@ static partial class CodeGeneration
         public IEnumerable<FunctionMember> Constructors => StackFrame.OfType<FunctionMember>().Where(f => f.IsConstructor);
     }
 
-    record FunctionMember(string Name) : Member(Name)
+    internal record FunctionMember(string Name) : Member(Name)
     {
         public FunctionMember(string Name, TypeMember? returnType) : this(Name) =>
             ReturnType = returnType;
