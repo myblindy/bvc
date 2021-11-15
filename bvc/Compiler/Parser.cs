@@ -1,4 +1,4 @@
-﻿using System.Linq.Expressions;
+﻿using Mono.Cecil;
 
 namespace bvc.Compiler;
 
@@ -9,7 +9,10 @@ abstract record NodeWithMembers : Node
 }
 record RootNode : NodeWithMembers;
 record EnumDeclarationNode(string Name, (string Name, long? Value)[] Members) : Node;
-record ClassDeclarationNode(string Name, string[]? GenericTypes = null) : NodeWithMembers;
+record ClassDeclarationNode(string Name, string[]? GenericTypes = null) : NodeWithMembers
+{
+    public Action<TypeDefinition>? CustomCode { get; init; }
+}
 record FunctionDeclarationNode(string Name, IdentifierExpressionNode? ReturnType, (TokenType Modifier, string Name, string Type)[] Arguments, bool Internal = false) : NodeWithMembers
 {
     public const string PrimaryConstructorName = ".ctor";

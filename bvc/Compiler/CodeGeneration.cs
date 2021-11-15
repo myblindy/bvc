@@ -66,8 +66,40 @@ static partial class CodeGeneration
         addBinaryOperation(stringStackFrame, OperatorAddName, StringClassDeclaration, IntegerClassDeclaration);
         addBinaryOperation(stringStackFrame, OperatorAddName, StringClassDeclaration, DoubleClassDeclaration);
 
+        // List<T> implementation
         rootNode.Members.Insert(0, new ClassDeclarationNode("List", new[] { "T" })
         {
+            CustomCode = def =>
+            {
+                var listReference = module.ImportReference(typeof(List<>)).MakeGenericInstanceType(def.GenericParameters[0]);
+                var listDef = new FieldDefinition("list", FieldAttributes.Private, listReference);
+                def.Fields.Add(listDef);
+
+                var constructorDef = def.GetConstructors().First();
+                var constructorIl = constructorDef.Body.GetILProcessor();
+                constructorIl.Emit(OpCodes.Ldarg_0);
+                constructorIl.Emit(OpCodes.Newobj, TypeHelpers.DefaultCtorFor(listReference));
+                constructorIl.Emit(OpCodes.Stfld, listDef);
+
+                var addDef = def.Methods.First(m => m.Name == "Add");
+                addDef.Body.Instructions.Clear();
+                var addIl = addDef.Body.GetILProcessor();
+                addIl.Emit(OpCodes.Ldarg_0);
+                addIl.Emit(OpCodes.Ldfld, listDef);
+                addIl.Emit(OpCodes.Ldarg_1);
+                addIl.Emit(OpCodes.Callvirt, module.ImportReference(listReference.ElementType.Resolve().Methods.First(m => m.Name == "Add")));
+                addIl.Emit(OpCodes.Ret);
+
+                var getDef = def.Methods.First(m => m.Name == "Get");
+                getDef.Body.Instructions.Clear();
+                var getIl = getDef.Body.GetILProcessor();
+                getIl.Emit(OpCodes.Ldarg_0);
+                getIl.Emit(OpCodes.Ldfld, listDef);
+                getIl.Emit(OpCodes.Ldarg_1);
+                getIl.Emit(OpCodes.Conv_I4);
+                getIl.Emit(OpCodes.Callvirt, module.ImportReference(listReference.ElementType.Resolve().Methods.First(m => m.Name == "get_Item")));
+                getIl.Emit(OpCodes.Ret);
+            },
             Members =
             {
                 new FunctionDeclarationNode(FunctionDeclarationNode.PrimaryConstructorName, null, new[] { (TokenType.VarArgKeyword, "vals", "T") }),
@@ -260,6 +292,8 @@ static partial class CodeGeneration
 
             classDeclaration.StackFrame.SetMemberReference(classTypeDefinition, stackFrame);
             WriteDeclarations(classDeclarationNode, classDeclaration.StackFrame);
+
+            classDeclarationNode.CustomCode?.Invoke(classTypeDefinition);
 
             // finalize all constructors, they were left unfinished to write field initialization
             foreach (var constructorDefinition in classTypeDefinition.Methods.Where(m => m.IsConstructor))
