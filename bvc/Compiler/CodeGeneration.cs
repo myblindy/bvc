@@ -50,6 +50,7 @@ static partial class CodeGeneration
         addBinaryOperation(integerStackFrame, OperatorDivName, DoubleClassDeclaration, DoubleClassDeclaration);
         addBinaryOperation(integerStackFrame, OperatorMulName, IntegerClassDeclaration, IntegerClassDeclaration);
         addBinaryOperation(integerStackFrame, OperatorMulName, DoubleClassDeclaration, DoubleClassDeclaration);
+        addBinaryOperation(integerStackFrame, OperatorAddName, StringClassDeclaration, StringClassDeclaration);
 
         addBinaryOperation(doubleStackFrame, OperatorAddName, DoubleClassDeclaration, DoubleClassDeclaration);
         addBinaryOperation(doubleStackFrame, OperatorAddName, DoubleClassDeclaration, IntegerClassDeclaration);
@@ -59,8 +60,11 @@ static partial class CodeGeneration
         addBinaryOperation(doubleStackFrame, OperatorDivName, DoubleClassDeclaration, IntegerClassDeclaration);
         addBinaryOperation(doubleStackFrame, OperatorMulName, DoubleClassDeclaration, DoubleClassDeclaration);
         addBinaryOperation(doubleStackFrame, OperatorMulName, DoubleClassDeclaration, IntegerClassDeclaration);
+        addBinaryOperation(doubleStackFrame, OperatorAddName, StringClassDeclaration, StringClassDeclaration);
 
         addBinaryOperation(stringStackFrame, OperatorAddName, StringClassDeclaration, StringClassDeclaration);
+        addBinaryOperation(stringStackFrame, OperatorAddName, StringClassDeclaration, IntegerClassDeclaration);
+        addBinaryOperation(stringStackFrame, OperatorAddName, StringClassDeclaration, DoubleClassDeclaration);
 
         rootNode.Members.Insert(0, new ClassDeclarationNode("List", new[] { "T" })
         {
@@ -177,6 +181,9 @@ static partial class CodeGeneration
 
                         functionStackFrame.Add(new ReturnStatement(returnStatementNode.Expression));
                         break;
+                    case ExpressionStatementNode expressionStatementNode:
+                        functionStackFrame.Add(new ExpressionStatement(expressionStatementNode.Expression));
+                        break;
                     default: throw new NotImplementedException();
                 }
         }
@@ -291,6 +298,9 @@ static partial class CodeGeneration
                             functionIl.Emit(OpCodes.Ret);
                             break;
                         }
+                    case ExpressionStatement expressionStatement:
+                        WriteExpressionNode(expressionStatement.ExpressionNode, functionIl, expressionStatement.StackFrame);
+                        break;
                     default: throw new NotImplementedException();
                 }
 
@@ -482,8 +492,30 @@ static partial class CodeGeneration
                     var functionMember = stackFrame.FindFunction(functionCallExpressionNode.Expression, out var inferredGenericParameters, functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray());
                     if (functionMember is null) throw new NotImplementedException();
 
-                    if (!functionMember.IsConstructor)
-                        ilProcessor.Emit(OpCodes.Ldarg_0);
+                    //if (!functionMember.IsConstructor)
+                    //    ilProcessor.Emit(OpCodes.Ldarg_0);
+                    if (functionCallExpressionNode.Expression is not BinaryExpressionNode binaryExpressionNode2)
+                    {
+                        if (!functionMember.IsConstructor)
+                            ilProcessor.Emit(OpCodes.Ldarg_0); // this.
+                    }
+                    else
+                    {
+                        VariableMember emitLoads(BinaryExpressionNode be)
+                        {
+                            // a lot of cases missing, that's fine, just implement as needed
+                            if (be.Left is BinaryExpressionNode binaryExpressionNode3)
+                                return emitLoads(binaryExpressionNode3);
+                            else
+                            {
+                                var member = stackFrame.Find<VariableMember>(((IdentifierExpressionNode)be.Left).Identifier);
+                                if (member is null) throw new NotImplementedException();
+                                ilProcessor.Emit(OpCodes.Ldloc, (VariableDefinition)member.StackFrame.MemberReference!);
+                                return member;
+                            }
+                        }
+                        emitLoads(binaryExpressionNode2);
+                    }
 
                     var methodReference = (MethodReference)functionMember.StackFrame.MemberReference!;
                     var classMember = (ClassMember)functionMember.StackFrame.Parent!.FindParentMember()!;
@@ -695,4 +727,5 @@ static partial class CodeGeneration
 
     abstract record Statement() : Member((string?)null);
     record ReturnStatement(ExpressionNode ExpressionNode) : Statement;
+    record ExpressionStatement(ExpressionNode ExpressionNode) : Statement;
 }

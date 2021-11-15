@@ -14,6 +14,8 @@ class C(var a: Integer, var b: String, val c: Double, val arf: Arf, val d: D) {
         val lst2 = List(1, 2);
         val lst3 = List(1, 2, 3);
         val lst4 = List(1, 2, 3, 4);
+
+        lst0.Add(1);
     }
 
     fun F(x: Integer, y: Integer): Void {

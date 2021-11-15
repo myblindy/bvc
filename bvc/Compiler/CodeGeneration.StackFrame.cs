@@ -65,6 +65,8 @@ partial class CodeGeneration
                     return member;
                 else if (recurse)
                     return Parent?.Find<T>(name, recurse);
+                else
+                    return null;
             }
         }
 
@@ -145,10 +147,16 @@ partial class CodeGeneration
                         while (pIdx < parameters.Length && parameters[pIdx].IsAssignableTo(destType)) ++pIdx;
                         --pIdx;
                     }
-                    else if (!parameterVariableMembers[pvmIdx].Type!.IsAssignableTo(parameters[pIdx]))
+                    else if (!(parameterVariableMembers[pvmIdx].Type switch
+                    {
+                        GenericTypeMember genericTypeMember => allGenericParameters[getGenericMemberIndex(genericTypeMember)],
+                        _ => parameterVariableMembers[pvmIdx].Type!
+                    }).IsAssignableTo(parameters[pIdx]))
+                    {
                         return (false, null);
+                    }
 
-                return (pvmIdx == parameterVariableMembers.Count && pIdx == parameters.Length, null);
+                return (pvmIdx == parameterVariableMembers.Count && pIdx == parameters.Length, allGenericParameters);
             }
 
             while (true)
@@ -197,8 +205,10 @@ partial class CodeGeneration
                     var leftMember = internalFindFunction(binaryExpressionNode.Left, out newInferredGenericParameters, parameters, stackFrame, true, level + 1);
                     if (leftMember is null) return null;
                     var rightMember = level == 0
-                        ? leftMember.StackFrame.FindFunction(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier, genericParameters, out newInferredGenericParameters, parameters, false)
-                        : leftMember.StackFrame.Find<Member>(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier, false);
+                        ? ((VariableMember)leftMember).Type!.StackFrame.FindFunction(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier,
+                            (((VariableMember)leftMember).Type?.StackFrame.GenericTypeMembers ?? Array.Empty<TypeMember>()).Concat(genericParameters).ToArray(),
+                            out newInferredGenericParameters, parameters, false)
+                        : ((VariableMember)leftMember).Type!.StackFrame.Find<Member>(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier, false);
                     return rightMember;
                 }
                 newInferredGenericParameters = null;

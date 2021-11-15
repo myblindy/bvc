@@ -1,4 +1,6 @@
-﻿namespace bvc.Compiler;
+﻿using System.Linq.Expressions;
+
+namespace bvc.Compiler;
 
 abstract record Node;
 abstract record NodeWithMembers : Node
@@ -26,6 +28,7 @@ record FunctionCallExpressionNode(ExpressionNode Expression, ExpressionNode[] Ar
 record GroupingExpressionNode(ExpressionNode Expression) : ExpressionNode;
 abstract record StatementNode : Node;
 record ReturnStatementNode(ExpressionNode Expression) : StatementNode;
+record ExpressionStatementNode(ExpressionNode Expression) : StatementNode;
 
 class Parser
 {
@@ -246,8 +249,9 @@ class Parser
                 node.Members.Add(new VariableDeclarationNode(variableKindTokenType, name, type, initialValueIsGet ? null : initialValue, functionGet));
             }
 
-            // return
             if (memberType == MemberType.Function)
+            {
+                // return
                 while (MatchTokenTypes(TokenType.ReturnKeyword) != TokenType.Error)
                 {
                     var expression = ParseExpression();
@@ -257,6 +261,15 @@ class Parser
                     foundAny = true;
                     node.Members.Add(new ReturnStatementNode(expression));
                 }
+
+                // expression
+                while (ParseExpression() is { } expression)
+                {
+                    ExpectTokenTypes(TokenType.SemiColon);
+                    foundAny = true;
+                    node.Members.Add(new ExpressionStatementNode(expression));
+                }
+            }
         } while (foundAny);
     }
 
@@ -266,7 +279,7 @@ class Parser
     ExpressionNode? ParseEqualityExpression()
     {
         var left = ParseComparisonExpression();
-        if (left is null) throw new NotImplementedException();
+        if (left is null) return null;
 
         while (MatchTokenTypes(TokenType.EqualsEquals, TokenType.NotEquals) is { } operatorTokenType && operatorTokenType != TokenType.Error)
         {
@@ -282,7 +295,7 @@ class Parser
     ExpressionNode? ParseComparisonExpression()
     {
         var left = ParseTermExpression();
-        if (left is null) throw new NotImplementedException();
+        if (left is null) return null;
 
         while (MatchTokenTypes(TokenType.LessThan, TokenType.LessThanEqual, TokenType.GreaterThan, TokenType.GreaterThanEqual) is { } operatorTokenType && operatorTokenType != TokenType.Error)
         {
@@ -298,7 +311,7 @@ class Parser
     ExpressionNode? ParseTermExpression()
     {
         var left = ParseFactorExpression();
-        if (left is null) throw new NotImplementedException();
+        if (left is null) return null;
 
         while (MatchTokenTypes(TokenType.Plus, TokenType.Minus) is { } operatorTokenType && operatorTokenType != TokenType.Error)
         {
@@ -314,7 +327,7 @@ class Parser
     ExpressionNode? ParseFactorExpression()
     {
         var left = ParseUnaryExpression();
-        if (left is null) throw new NotImplementedException();
+        if (left is null) return null;
 
         while (MatchTokenTypes(TokenType.Star, TokenType.Slash) is { } operatorTokenType && operatorTokenType != TokenType.Error)
         {
@@ -389,7 +402,7 @@ class Parser
                 return node;
         }
 
-        throw new NotImplementedException();
+        return null;
     }
 
     IdentifierExpressionNode? ParseIdentifierExpressionNode(bool identifierMatched = false)
