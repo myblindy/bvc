@@ -13,14 +13,27 @@ record ClassDeclarationNode(string Name, string[]? GenericTypes = null) : NodeWi
 {
     public Action<TypeDefinition>? CustomCode { get; init; }
 }
-record FunctionDeclarationNode(string Name, IdentifierExpressionNode? ReturnType, (TokenType Modifier, string Name, string Type)[] Arguments, bool Internal = false) : NodeWithMembers
+record FunctionDeclarationNode(TokenType Modifier, string Name, IdentifierExpressionNode? ReturnType, (TokenType Modifier, string Name, string Type)[] Arguments, bool Internal = false) : NodeWithMembers
 {
     public const string PrimaryConstructorName = ".ctor";
     public bool IsPrimaryConstructor => Name == PrimaryConstructorName;
 }
 record VariableDeclarationNode(TokenType Modifier, string Name, IdentifierExpressionNode? ReturnType, ExpressionNode? InitialValueExpression, FunctionDeclarationNode? GetFunction) : Node;
 abstract record ExpressionNode : Node;
-record BinaryExpressionNode(ExpressionNode Left, TokenType Operator, ExpressionNode Right) : ExpressionNode;
+record BinaryExpressionNode(ExpressionNode Left, TokenType Operator, ExpressionNode Right) : ExpressionNode
+{
+    public ExpressionNode LeftMostExpression
+    {
+        get
+        {
+            BinaryExpressionNode e = this;
+            while (e.Left is BinaryExpressionNode leftBinaryExpressionNode)
+                e = leftBinaryExpressionNode;
+
+            return e.Left;
+        }
+    }
+}
 record UnaryExpressionNode(TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record LiteralExpressionNode(object Value) : ExpressionNode;
 record IdentifierExpressionNode(string Identifier, ExpressionNode[]? GenericParameters = null) : ExpressionNode
@@ -141,7 +154,7 @@ class Parser
                         }
                         ExpectTokenTypes(TokenType.CloseParentheses);
 
-                        classDeclarationNode.Members.Add(new FunctionDeclarationNode(FunctionDeclarationNode.PrimaryConstructorName, null, args.ToArray()));
+                        classDeclarationNode.Members.Add(new FunctionDeclarationNode(TokenType.None, FunctionDeclarationNode.PrimaryConstructorName, null, args.ToArray()));
                     }
 
                     if (MatchTokenTypes(TokenType.OpenBrace) != TokenType.Error)
@@ -160,6 +173,8 @@ class Parser
             // fun F(a: int, b: int) { }
             while (MatchTokenTypes(TokenType.FunKeyword) != TokenType.Error)
             {
+                var @static = MatchTokenTypes(TokenType.StaticKeyword) != TokenType.Error;
+
                 ExpectTokenTypes(TokenType.Identifier);
                 var name = ((IdentifierToken)LastMatchedToken!).Text;
                 ExpectTokenTypes(TokenType.OpenParentheses);
@@ -184,7 +199,7 @@ class Parser
                 if (MatchTokenTypes(TokenType.Colon) != TokenType.Error)
                     returnType = (IdentifierExpressionNode)ParseExpression()!;
 
-                var functionDeclarationNode = new FunctionDeclarationNode(name, returnType, args.ToArray());
+                var functionDeclarationNode = new FunctionDeclarationNode(@static ? TokenType.StaticKeyword : TokenType.None, name, returnType, args.ToArray());
 
                 if (MatchTokenTypes(TokenType.OpenBrace) != TokenType.Error)
                 {
@@ -223,7 +238,7 @@ class Parser
                         (initialValue, initialValueIsGet) = (ParseExpression(), true);
                     else if (MatchTokenTypes(TokenType.OpenBrace) != TokenType.Error)
                     {
-                        ParseMembers(functionGet = new($"get_{name}", type, Array.Empty<(TokenType, string, string)>(), true), MemberType.Function);
+                        ParseMembers(functionGet = new(TokenType.None, $"get_{name}", type, Array.Empty<(TokenType, string, string)>(), true), MemberType.Function);
                         ExpectTokenTypes(TokenType.CloseBrace);
                         needsSemiColon = false;
                     }
@@ -242,7 +257,7 @@ class Parser
 
                 foundAny = true;
                 if (functionGet is null && initialValue is not null && initialValueIsGet)
-                    functionGet = new($"get_{name}", type, Array.Empty<(TokenType, string, string)>(), true);
+                    functionGet = new(TokenType.None, $"get_{name}", type, Array.Empty<(TokenType, string, string)>(), true);
 
                 if (functionGet?.Members.Count == 0)
                     functionGet.Members.Add(new ReturnStatementNode(initialValue!));

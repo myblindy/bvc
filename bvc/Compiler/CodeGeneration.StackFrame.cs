@@ -204,11 +204,19 @@ partial class CodeGeneration
                 {
                     var leftMember = internalFindFunction(binaryExpressionNode.Left, out newInferredGenericParameters, parameters, stackFrame, true, level + 1);
                     if (leftMember is null) return null;
+
+                    var leftType = leftMember switch
+                    {
+                        VariableMember variableMember => variableMember.Type!,
+                        ClassMember classMember => classMember,
+                        _ => throw new NotImplementedException()
+                    };
+
                     var rightMember = level == 0
-                        ? ((VariableMember)leftMember).Type!.StackFrame.FindFunction(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier,
-                            (((VariableMember)leftMember).Type?.StackFrame.GenericTypeMembers ?? Array.Empty<TypeMember>()).Concat(genericParameters).ToArray(),
+                        ? leftType.StackFrame.FindFunction(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier,
+                            (leftType.StackFrame.GenericTypeMembers ?? Array.Empty<TypeMember>()).Concat(genericParameters).ToArray(),
                             out newInferredGenericParameters, parameters, false)
-                        : ((VariableMember)leftMember).Type!.StackFrame.Find<Member>(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier, false);
+                        : leftType.StackFrame.Find<Member>(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier, false);
                     return rightMember;
                 }
                 newInferredGenericParameters = null;

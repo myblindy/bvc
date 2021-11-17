@@ -2,7 +2,6 @@
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 
 namespace bvc.Compiler;
@@ -25,7 +24,7 @@ static partial class CodeGeneration
 
     public static void Generate(RootNode rootNode, Stream stream, string assemblyName)
     {
-        var assembly = AssemblyDefinition.CreateAssembly(new(assemblyName, new()), assemblyName, ModuleKind.Dll);
+        var assembly = AssemblyDefinition.CreateAssembly(new(assemblyName, new()), assemblyName, ModuleKind.Console);
         var module = assembly.MainModule!;
 
         StackFrame mainStackFrame = new(null);
@@ -40,7 +39,7 @@ static partial class CodeGeneration
         mainStackFrame.Add(VoidClassDeclaration = new("Void"), module.TypeSystem.Void);
 
         static void addBinaryOperation(StackFrame s, string op, ClassMember ret, ClassMember right) =>
-            s.Add(new FunctionMember(op, ret)).Add(new ParameterVariableMember(TokenType.ValKeyword, "right", right));
+            s.Add(new FunctionMember(TokenType.None, op, ret)).Add(new ParameterVariableMember(TokenType.ValKeyword, "right", right));
 
         addBinaryOperation(integerStackFrame, OperatorAddName, IntegerClassDeclaration, IntegerClassDeclaration);
         addBinaryOperation(integerStackFrame, OperatorAddName, DoubleClassDeclaration, DoubleClassDeclaration);
@@ -99,13 +98,44 @@ static partial class CodeGeneration
                 getIl.Emit(OpCodes.Conv_I4);
                 getIl.Emit(OpCodes.Callvirt, module.ImportReference(listReference.ElementType.Resolve().Methods.First(m => m.Name == "get_Item")));
                 getIl.Emit(OpCodes.Ret);
+
+                var countDef = def.Properties.First(p => p.Name == "Count");
+                countDef.GetMethod.Body.Instructions.Clear();
+                var countIl = countDef.GetMethod.Body.GetILProcessor();
+                countIl.Emit(OpCodes.Ldarg_0);
+                countIl.Emit(OpCodes.Ldfld, listDef);
+                countIl.Emit(OpCodes.Callvirt, module.ImportReference(listReference.ElementType.Resolve().Methods.First(m => m.Name == "get_Count")));
+                countIl.Emit(OpCodes.Ret);
             },
             Members =
             {
-                new FunctionDeclarationNode(FunctionDeclarationNode.PrimaryConstructorName, null, new[] { (TokenType.VarArgKeyword, "vals", "T") }),
-                new FunctionDeclarationNode("Add", null, new[] { (TokenType.None, "obj", "T") }),
-                new FunctionDeclarationNode("Get", new("T"), new[] { (TokenType.None, "index", "Integer") }),
-                new VariableDeclarationNode(TokenType.ValKeyword, "Count", new("Integer"), null, null),
+                new FunctionDeclarationNode(TokenType.None, FunctionDeclarationNode.PrimaryConstructorName, null, new[] { (TokenType.VarArgKeyword, "vals", "T") }),
+                new FunctionDeclarationNode(TokenType.None, "Add", null, new[] { (TokenType.None, "obj", "T") }),
+                new FunctionDeclarationNode(TokenType.None, "Get", new("T"), new[] { (TokenType.None, "index", "Integer") }),
+                new VariableDeclarationNode(TokenType.ValPureKeyword, "Count", new("Integer"), null, null),
+            }
+        });
+
+        // Console implementation
+        rootNode.Members.Insert(1, new ClassDeclarationNode("Console")
+        {
+            CustomCode = def =>
+            {
+                foreach (var name in new[] { "Write", "WriteLine" })
+                {
+                    var writeDef = def.Methods.First(n => n.Name == name)!;
+                    writeDef.Body.Instructions.Clear();
+                    var writeIl = writeDef.Body.GetILProcessor();
+                    writeIl.Emit(OpCodes.Ldarg_0); // no this, first argument
+                    writeIl.Emit(OpCodes.Call, module.ImportReference(TypeHelpers.ResolveMethod("System.Console", "System.Console", name,
+                        System.Reflection.BindingFlags.Default | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public, "", "System.String")));
+                    writeIl.Emit(OpCodes.Ret);
+                }
+            },
+            Members =
+            {
+                new FunctionDeclarationNode(TokenType.StaticKeyword, "Write", null, new[] { (TokenType.None, "s", "String") } ),
+                new FunctionDeclarationNode(TokenType.StaticKeyword, "WriteLine", null, new[] { (TokenType.None, "s", "String") } ),
             }
         });
 
@@ -187,7 +217,7 @@ static partial class CodeGeneration
 
         void ParseFunctionDeclarationNode(FunctionDeclarationNode functionDeclarationNode, StackFrame stackFrame)
         {
-            var functionDeclaration = new FunctionMember(functionDeclarationNode.Name, functionDeclarationNode.IsPrimaryConstructor
+            var functionDeclaration = new FunctionMember(functionDeclarationNode.Modifier, functionDeclarationNode.Name, functionDeclarationNode.IsPrimaryConstructor
                 ? (ClassMember)stackFrame.FindParentMember()!
                 : stackFrame.Find<TypeMember>(functionDeclarationNode.ReturnType));
             var functionStackFrame = stackFrame.Add(functionDeclaration);
@@ -348,10 +378,14 @@ static partial class CodeGeneration
             var functionMember = stackFrame.FindFunction(functionDeclarationNode.Name, stackFrame.GenericTypeMembers, out _,
                 functionDeclarationNode.Arguments.Select(a => stackFrame.Find<TypeMember>(a.Type)!).ToArray())!;
             var functionDefinition = new MethodDefinition(functionMember.Name,
-                MethodAttributes.Public | (functionDeclarationNode.IsPrimaryConstructor
+                MethodAttributes.Public | (functionDeclarationNode.Modifier is TokenType.StaticKeyword ? MethodAttributes.Static : 0) | (functionDeclarationNode.IsPrimaryConstructor
                     ? MethodAttributes.HideBySig | MethodAttributes.RTSpecialName | MethodAttributes.SpecialName
                     : 0), (functionDeclarationNode.IsPrimaryConstructor ? null : (TypeReference?)functionMember.ReturnType?.StackFrame.MemberReference) ?? module!.TypeSystem.Void);
             functionMember.StackFrame.SetMemberReference(functionDefinition, stackFrame);
+
+            // entry point?
+            if (functionDeclarationNode is { Modifier: TokenType.StaticKeyword, Name: "Main" })
+                assembly.EntryPoint = functionDefinition;
 
             // arguments
             int parameterIdx = 0;
@@ -408,11 +442,13 @@ static partial class CodeGeneration
             var variableField = stackFrame.Find<VariableMember>(variableDeclarationNode.Name)!;
             var parentTypeDefinition = (TypeDefinition)stackFrame.MemberReference!;
 
-            if (variableField.GetFunction is not null)
+            if (variableField.GetFunction is not null || variableDeclarationNode.Modifier == TokenType.ValPureKeyword)
             {
                 // this is actually a read-only property with no backing field
                 var (propertyDefinition, _) = BuildPropertyDefinition(parentTypeDefinition, variableField.Modifier, variableField.Name!, (TypeReference)variableField.Type!.StackFrame.MemberReference!, module!,
-                    writeGetBody: (ilProcessor, functionDefinition, fieldDefinition) => WriteFunctionBody(variableField.StackFrame.AccessorFrames.Get, functionDefinition, ilProcessor));
+                    writeGetBody: variableField.GetFunction is null ? null
+                        : (ilProcessor, functionDefinition, fieldDefinition) => WriteFunctionBody(variableField.StackFrame.AccessorFrames.Get, functionDefinition, ilProcessor));
+                variableField.StackFrame.SetMemberReference(propertyDefinition, stackFrame);
             }
             else
             {
@@ -526,8 +562,6 @@ static partial class CodeGeneration
                     var functionMember = stackFrame.FindFunction(functionCallExpressionNode.Expression, out var inferredGenericParameters, functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray());
                     if (functionMember is null) throw new NotImplementedException();
 
-                    //if (!functionMember.IsConstructor)
-                    //    ilProcessor.Emit(OpCodes.Ldarg_0);
                     if (functionCallExpressionNode.Expression is not BinaryExpressionNode binaryExpressionNode2)
                     {
                         if (!functionMember.IsConstructor)
@@ -535,20 +569,25 @@ static partial class CodeGeneration
                     }
                     else
                     {
-                        VariableMember emitLoads(BinaryExpressionNode be)
+                        // if the left most expression is a type, this is a static lookup
+                        var id = (IdentifierExpressionNode)binaryExpressionNode2.LeftMostExpression;
+                        if (stackFrame.Find<Member>(id) is not TypeMember)
                         {
-                            // a lot of cases missing, that's fine, just implement as needed
-                            if (be.Left is BinaryExpressionNode binaryExpressionNode3)
-                                return emitLoads(binaryExpressionNode3);
-                            else
+                            VariableMember emitLoads(BinaryExpressionNode be)
                             {
-                                var member = stackFrame.Find<VariableMember>(((IdentifierExpressionNode)be.Left).Identifier);
-                                if (member is null) throw new NotImplementedException();
-                                ilProcessor.Emit(OpCodes.Ldloc, (VariableDefinition)member.StackFrame.MemberReference!);
-                                return member;
+                                // a lot of cases missing, that's fine, just implement as needed
+                                if (be.Left is BinaryExpressionNode binaryExpressionNode3)
+                                    return emitLoads(binaryExpressionNode3);
+                                else
+                                {
+                                    var member = stackFrame.Find<VariableMember>(((IdentifierExpressionNode)be.Left).Identifier);
+                                    if (member is null) throw new NotImplementedException();
+                                    ilProcessor.Emit(OpCodes.Ldloc, (VariableDefinition)member.StackFrame.MemberReference!);
+                                    return member;
+                                }
                             }
+                            emitLoads(binaryExpressionNode2);
                         }
-                        emitLoads(binaryExpressionNode2);
                     }
 
                     var methodReference = (MethodReference)functionMember.StackFrame.MemberReference!;
@@ -629,6 +668,7 @@ static partial class CodeGeneration
         WriteDeclarations(rootNode, mainStackFrame);
 
         PrivateCoreLibFixer.FixReferences(module);
+        module.Architecture = TargetArchitecture.AMD64;
         assembly.Write(stream);
     }
 
@@ -639,7 +679,7 @@ static partial class CodeGeneration
 
         // backing field
         FieldDefinition? fieldDefinition = default;
-        if (forceBackingFieldGet || modifier != TokenType.ValKeyword)
+        if (forceBackingFieldGet || modifier is not TokenType.ValKeyword and not TokenType.ValPureKeyword)
         {
             fieldDefinition = new FieldDefinition($"<P>{name}__BackingField", FieldAttributes.Private, type);
             typeDefinition.Fields.Add(fieldDefinition);
@@ -652,7 +692,7 @@ static partial class CodeGeneration
         propertyDefinition.GetMethod = propertyGetterDefinition;
 
         var propertyGetterIl = propertyDefinition.GetMethod.Body.GetILProcessor();
-        if (writeGetBody is null && (forceBackingFieldGet || modifier != TokenType.ValKeyword))
+        if (writeGetBody is null && (forceBackingFieldGet || modifier is not TokenType.ValKeyword and not TokenType.ValPureKeyword))
         {
             propertyGetterIl.Emit(OpCodes.Ldarg_0);
             propertyGetterIl.Emit(OpCodes.Ldfld, fieldDefinition);
@@ -696,7 +736,7 @@ static partial class CodeGeneration
 
     internal abstract record Member(string? Name)
     {
-        public StackFrame StackFrame { get; set; }
+        public StackFrame StackFrame { get; set; } = null!;
     }
     record VariableMember(TokenType Modifier, string Name, TypeMember? Type, ExpressionNode? InitialValueExpression = null, FunctionDeclarationNode? GetFunction = null) : Member(Name);
     internal record ParameterVariableMember(TokenType Modifier, string Name, TypeMember? Type, ExpressionNode? InitialValueExpression = null) : Member(Name);
@@ -751,9 +791,9 @@ static partial class CodeGeneration
         public IEnumerable<FunctionMember> Constructors => StackFrame.OfType<FunctionMember>().Where(f => f.IsConstructor);
     }
 
-    internal record FunctionMember(string Name) : Member(Name)
+    internal record FunctionMember(TokenType Modifier, string Name) : Member(Name)
     {
-        public FunctionMember(string Name, TypeMember? returnType) : this(Name) =>
+        public FunctionMember(TokenType Modifier, string Name, TypeMember? returnType) : this(Modifier, Name) =>
             ReturnType = returnType;
         public TypeMember? ReturnType { get; set; }
         public bool IsConstructor { get; } = Name == ".ctor";

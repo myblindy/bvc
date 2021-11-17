@@ -196,7 +196,7 @@ namespace Cecilifier.Runtime
 
     public struct PrivateCoreLibFixer
     {
-        static AssemblyNameReference _systemRuntimeRef;
+        static readonly AssemblyNameReference _systemRuntimeRef;
 
         static PrivateCoreLibFixer()
         {

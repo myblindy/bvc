@@ -19,6 +19,7 @@ class C(var a: Integer, var b: String, val c: Double, val arf: Arf, val d: D) {
 
         var lstString = List(""a"", ""b"");
         lstString.Add(""c"");
+        var cntLstString = lstString.Count;
     }
 
     fun F(x: Integer, y: Integer): Void {
@@ -56,6 +57,13 @@ class C(var a: Integer, var b: String, val c: Double, val arf: Arf, val d: D) {
     class IC {
         enum Meep { X }
     }
+}
+
+class Program
+{
+    fun static Main() {
+        Console.WriteLine(""hello"");
+    }
 }");
 
 var lexer = new Lexer(stream);
@@ -63,5 +71,5 @@ var lexer = new Lexer(stream);
 var parser = new Parser(lexer);
 var rootNode = parser.Parse();
 
-using var outputStream = File.OpenWrite("out.dll");
+using var outputStream = File.OpenWrite("out.exe");
 CodeGeneration.Generate(rootNode!, outputStream, "out");

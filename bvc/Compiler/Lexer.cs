@@ -38,6 +38,7 @@ enum TokenType
     FalseKeyword,
     VarKeyword,
     ValKeyword,
+    ValPureKeyword,
     EnumKeyword,
     ClassKeyword,
     FunKeyword,
@@ -45,6 +46,7 @@ enum TokenType
     GetKeyword,
     SetKeyword,
     VarArgKeyword,
+    StaticKeyword,
 
     Error = int.MaxValue
 }
@@ -121,6 +123,7 @@ class Lexer
         ["get"] = TokenType.GetKeyword,
         ["return"] = TokenType.ReturnKeyword,
         ["vararg"] = TokenType.VarArgKeyword,
+        ["static"] = TokenType.StaticKeyword,
     };
 
     public Transaction? StartTransaction() => transaction is null ? transaction = new(this) : null;
