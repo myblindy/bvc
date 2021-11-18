@@ -197,6 +197,7 @@ namespace Cecilifier.Runtime
     public struct PrivateCoreLibFixer
     {
         static readonly AssemblyNameReference _systemRuntimeRef;
+        static readonly AssemblyNameReference _systemCollectionsRuntimeRef;
 
         static PrivateCoreLibFixer()
         {
@@ -205,6 +206,12 @@ namespace Cecilifier.Runtime
             // in most platforms, referencing System.Object and other types ends up adding a reference to System.Private.CoreLib (note that in these platforms, System.Runtime has type forwarders for these types).
             // To avoid this reference to System.Private.CoreLib we update these types to pretend they come from System.Runtime instead.
             _systemRuntimeRef = new AssemblyNameReference(systemRuntime.GetName().Name, systemRuntime.GetName().Version)
+            {
+                PublicKeyToken = new byte[] { 0xb0, 0x3f, 0x5f, 0x7f, 0x11, 0xd5, 0x0a, 0x3a }
+            };
+
+            var systemCollectionsRuntime = AppDomain.CurrentDomain.GetAssemblies().Single(mr => mr.GetName().Name == "System.Collections");
+            _systemCollectionsRuntimeRef = new(systemCollectionsRuntime.GetName().Name, systemCollectionsRuntime.GetName().Version)
             {
                 PublicKeyToken = new byte[] { 0xb0, 0x3f, 0x5f, 0x7f, 0x11, 0xd5, 0x0a, 0x3a }
             };
@@ -312,17 +319,17 @@ namespace Cecilifier.Runtime
             if (t.Scope.Name == "mscorlib" || t.Scope.Name == "System.Private.CoreLib")
             {
                 if (!mainModule.AssemblyReferences.Any(a => a.Name == _systemRuntimeRef.Name))
-                {
                     mainModule.AssemblyReferences.Add(_systemRuntimeRef);
-                }
+                if (!mainModule.AssemblyReferences.Any(a => a.Name == _systemCollectionsRuntimeRef.Name))
+                    mainModule.AssemblyReferences.Add(_systemCollectionsRuntimeRef);
 
                 if (t is GenericInstanceType gt)
                 {
                 }
+                else if (t.Namespace.StartsWith("System.Collections"))
+                    t.Scope = _systemCollectionsRuntimeRef;
                 else
-                {
                     t.Scope = _systemRuntimeRef;
-                }
             }
 
 

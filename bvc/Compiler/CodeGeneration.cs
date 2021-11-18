@@ -26,7 +26,7 @@ static partial class CodeGeneration
     {
         GenericTypeMember genericTypeMember => foundInferredGenericParameters?.Any() == true
             ? foundInferredGenericParameters.ElementAt(t.StackFrame.Parent!.OfType<GenericTypeMember>().TakeWhile(w => w.Name != genericTypeMember.Name).Count())
-            : t.StackFrame.Parent.GenericTypeMembers![t.StackFrame.Parent!.OfType<GenericTypeMember>().TakeWhile(w => w.Name != genericTypeMember.Name).Count()],
+            : t.StackFrame.Parent!.GenericTypeMembers![t.StackFrame.Parent!.OfType<GenericTypeMember>().TakeWhile(w => w.Name != genericTypeMember.Name).Count()],
         EnumMember or ClassMember => t,
         _ => throw new NotImplementedException()
     };
