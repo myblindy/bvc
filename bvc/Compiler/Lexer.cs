@@ -47,6 +47,8 @@ enum TokenType
     SetKeyword,
     VarArgKeyword,
     StaticKeyword,
+    ForKeyword,
+    InKeyword,
 
     Error = int.MaxValue
 }
@@ -124,6 +126,8 @@ class Lexer
         ["return"] = TokenType.ReturnKeyword,
         ["vararg"] = TokenType.VarArgKeyword,
         ["static"] = TokenType.StaticKeyword,
+        ["for"] = TokenType.ForKeyword,
+        ["in"] = TokenType.InKeyword,
     };
 
     public Transaction? StartTransaction() => transaction is null ? transaction = new(this) : null;

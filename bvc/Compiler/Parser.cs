@@ -13,7 +13,8 @@ record ClassDeclarationNode(string Name, string[]? GenericTypes = null) : NodeWi
 {
     public Action<TypeDefinition>? CustomCode { get; init; }
 }
-record FunctionDeclarationNode(TokenType Modifier, string Name, IdentifierExpressionNode? ReturnType, (TokenType Modifier, string Name, string Type)[] Arguments, bool Internal = false) : NodeWithMembers
+record BlockNode : NodeWithMembers;
+record FunctionDeclarationNode(TokenType Modifier, string Name, IdentifierExpressionNode? ReturnType, (TokenType Modifier, string Name, string Type)[] Arguments, bool Internal = false) : BlockNode
 {
     public const string PrimaryConstructorName = ".ctor";
     public bool IsPrimaryConstructor => Name == PrimaryConstructorName;
@@ -44,6 +45,7 @@ record FunctionCallExpressionNode(ExpressionNode Expression, ExpressionNode[] Ar
 record GroupingExpressionNode(ExpressionNode Expression) : ExpressionNode;
 abstract record StatementNode : Node;
 record ReturnStatementNode(ExpressionNode Expression) : StatementNode;
+record ForStatementNode(string VariableName, ExpressionNode EnumerableExpression, BlockNode Block) : StatementNode;
 record ExpressionStatementNode(ExpressionNode Expression) : StatementNode;
 
 class Parser
@@ -79,7 +81,7 @@ class Parser
     }
 
     enum MemberType { Function, Class }
-    void ParseMembers(NodeWithMembers node, MemberType memberType)
+    void ParseMembers(NodeWithMembers node, MemberType memberType, bool onlyOne = false)
     {
         bool foundAny;
         do
@@ -118,6 +120,7 @@ class Parser
 
                     node.Members.Add(new EnumDeclarationNode(name, enumMembers.ToArray()));
                     foundAny = true;
+                    if (onlyOne) return;
                 }
 
             // class
@@ -166,6 +169,7 @@ class Parser
                         ExpectTokenTypes(TokenType.SemiColon);
 
                     node.Members.Add(classDeclarationNode);
+                    if (onlyOne) return;
                     foundAny = true;
                 }
 
@@ -215,6 +219,7 @@ class Parser
 
                 foundAny = true;
                 node.Members.Add(functionDeclarationNode);
+                if (onlyOne) return;
             }
 
             // variables
@@ -265,6 +270,7 @@ class Parser
                     node.Members.Add(functionGet);
 
                 node.Members.Add(new VariableDeclarationNode(variableKindTokenType, name, type, initialValueIsGet ? null : initialValue, functionGet));
+                if (onlyOne) return;
             }
 
             if (memberType == MemberType.Function)
@@ -278,6 +284,30 @@ class Parser
 
                     foundAny = true;
                     node.Members.Add(new ReturnStatementNode(expression));
+                    if (onlyOne) return;
+                }
+
+                // for(v in enumerable) { ... }
+                while (MatchTokenTypes(TokenType.ForKeyword) != TokenType.Error)
+                {
+                    ExpectTokenTypes(TokenType.OpenParentheses);
+                    ExpectTokenTypes(TokenType.Identifier);
+                    var id = LastMatchedToken!.Text;
+                    ExpectTokenTypes(TokenType.InKeyword);
+                    var expr = ParseExpression()!;
+                    ExpectTokenTypes(TokenType.CloseParentheses);
+
+                    var body = new BlockNode();
+                    if (MatchTokenTypes(TokenType.OpenBrace) != TokenType.Error)
+                    {
+                        ParseMembers(body, MemberType.Function);
+                        ExpectTokenTypes(TokenType.CloseBrace);
+                    }
+                    else
+                        ParseMembers(body, MemberType.Function, true);
+
+                    node.Members.Add(new ForStatementNode(id, expr, body));
+                    if (onlyOne) return;
                 }
 
                 // expression
@@ -286,6 +316,7 @@ class Parser
                     ExpectTokenTypes(TokenType.SemiColon);
                     foundAny = true;
                     node.Members.Add(new ExpressionStatementNode(expression));
+                    if (onlyOne) return;
                 }
             }
         } while (foundAny);

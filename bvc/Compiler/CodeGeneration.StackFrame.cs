@@ -226,5 +226,20 @@ partial class CodeGeneration
         }
 
         public Member? FindParentMember() => Parent?.members.FirstOrDefault(w => w.stackFrame == this).member;
+
+        TMember? InternalFindParentMember<TMember>(Member start) where TMember : Member
+        {
+            if (start is TMember startMember) return startMember;
+            if (start.StackFrame.Parent is { } parent && parent.FindParentMember() is { } parentMember)
+                return InternalFindParentMember<TMember>(parentMember);
+            return null;
+        }
+
+        public TMember? FindParentMember<TMember>() where TMember : Member
+        {
+            var w = Parent?.members.FirstOrDefault(w => w.stackFrame == this);
+            if (!w.HasValue) return null;
+            return InternalFindParentMember<TMember>(w.Value.member);
+        }
     }
 }

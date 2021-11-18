@@ -62,7 +62,11 @@ class C(var a: Integer, var b: String, val c: Double, val arf: Arf, val d: D) {
 class Program
 {
     fun static Main() {
-        Console.WriteLine(""hello"");
+        var lst = List(1, 2, 3, 4, 5, 10);
+        lst.Add(100);
+
+        for(i in lst)
+            Console.WriteLine(""Found item: ${i}."");
     }
 }");
 

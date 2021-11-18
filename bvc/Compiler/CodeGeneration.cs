@@ -22,6 +22,15 @@ static partial class CodeGeneration
         _ => throw new NotImplementedException()
     };
 
+    static TypeMember ResolveGenericTypeMember(TypeMember t, IEnumerable<TypeMember>? foundInferredGenericParameters) => t switch
+    {
+        GenericTypeMember genericTypeMember => foundInferredGenericParameters?.Any() == true
+            ? foundInferredGenericParameters.ElementAt(t.StackFrame.Parent!.OfType<GenericTypeMember>().TakeWhile(w => w.Name != genericTypeMember.Name).Count())
+            : t.StackFrame.Parent.GenericTypeMembers![t.StackFrame.Parent!.OfType<GenericTypeMember>().TakeWhile(w => w.Name != genericTypeMember.Name).Count()],
+        EnumMember or ClassMember => t,
+        _ => throw new NotImplementedException()
+    };
+
     public static void Generate(RootNode rootNode, Stream stream, string assemblyName)
     {
         var assembly = AssemblyDefinition.CreateAssembly(new(assemblyName, new()), assemblyName, ModuleKind.Console);
@@ -228,7 +237,13 @@ static partial class CodeGeneration
                 stackFrame.Add(new VariableMember(arg.Modifier, arg.Name, type, null));
             }
 
-            foreach (var member in functionDeclarationNode.Members)
+            ParseBlockNode(functionDeclarationNode.Members, functionStackFrame);
+        }
+
+        void ParseBlockNode(IEnumerable<Node> nodes, StackFrame functionStackFrame)
+        {
+            var functionDeclaration = functionStackFrame.FindParentMember<FunctionMember>()!;
+            foreach (var member in nodes)
                 switch (member)
                 {
                     case VariableDeclarationNode variableDeclarationNode:
@@ -245,6 +260,13 @@ static partial class CodeGeneration
                         break;
                     case ExpressionStatementNode expressionStatementNode:
                         functionStackFrame.Add(new ExpressionStatement(expressionStatementNode.Expression));
+                        break;
+                    case ForStatementNode forStatementNode:
+                        {
+                            var forStackFrame = functionStackFrame.Add(new ForStatement(forStatementNode.VariableName, forStatementNode.EnumerableExpression));
+                            var bodyStackFrame = forStackFrame.Add(new BlockStatement());
+                            ParseBlockNode(forStatementNode.Block.Members, bodyStackFrame);
+                        }
                         break;
                     default: throw new NotImplementedException();
                 }
@@ -357,18 +379,67 @@ static partial class CodeGeneration
                             break;
                         }
                     case ReturnStatement returnStatement:
-                        {
-                            WriteExpressionNode(returnStatement.ExpressionNode, functionIl, returnStatement.StackFrame);
-                            functionIl.Emit(OpCodes.Ret);
-                            break;
-                        }
+                        WriteExpressionNode(returnStatement.ExpressionNode, functionIl, returnStatement.StackFrame);
+                        functionIl.Emit(OpCodes.Ret);
+                        break;
                     case ExpressionStatement expressionStatement:
                         WriteExpressionNode(expressionStatement.ExpressionNode, functionIl, expressionStatement.StackFrame);
+                        break;
+                    case ForStatement forStatement:
+                        {
+                            // get the components required for enumeration
+                            var enumerableType = ParseExpressionNodeTypeField(forStatement.EnumerableNode, forStatement.StackFrame);
+
+                            // store the count in a variable
+                            var countVariableMember = enumerableType.StackFrame.Find<VariableMember>("Count", false);
+                            if (countVariableMember is null) throw new NotImplementedException();
+                            var countVariable = new VariableDefinition((TypeReference)countVariableMember.Type!.StackFrame.MemberReference!);
+                            functionDefinition.Body.Variables.Add(countVariable);
+
+                            WriteExpressionNode(new BinaryExpressionNode(forStatement.EnumerableNode, TokenType.Dot, new IdentifierExpressionNode("Count")),
+                                functionIl, forStatement.StackFrame);
+                            functionIl.Emit(OpCodes.Stloc, countVariable);
+
+                            // get(long) gives us the variable type
+                            var getFunctionMember = enumerableType.StackFrame.FindFunction("Get", null, out var getInferredParameters, new[] { IntegerClassDeclaration }, false);
+                            if (getFunctionMember is null) throw new NotImplementedException();
+                            var getTypeMember = ResolveGenericTypeMember(getFunctionMember.ReturnType!, enumerableType.StackFrame.GenericTypeMembers);
+                            var iteratorVariable = new VariableDefinition((TypeReference)getTypeMember!.StackFrame.MemberReference!);
+                            functionDefinition.Body.Variables.Add(iteratorVariable);
+
+                            // for loop intro
+                            var indexVariable = new VariableDefinition(module!.TypeSystem.Int64);
+                            functionDefinition.Body.Variables.Add(indexVariable);
+
+                            // condition check
+                            var endLabel = functionIl.Create(OpCodes.Nop);
+                            var startLabel = functionIl.Create(OpCodes.Ldloc, indexVariable);
+                            functionIl.Append(startLabel);
+                            functionIl.Emit(OpCodes.Ldloc, countVariable);
+                            functionIl.Emit(OpCodes.Clt);
+                            functionIl.Emit(OpCodes.Brfalse, endLabel);
+
+                            // process
+                            WriteFunctionBody(forStatement.StackFrame, functionDefinition, functionIl);
+
+                            // iterate
+                            functionIl.Emit(OpCodes.Ldloc, indexVariable);
+                            functionIl.Emit(OpCodes.Ldc_I8, 1L);
+                            functionIl.Emit(OpCodes.Add);
+                            //functionIl.Emit(OpCodes.Dup);
+                            functionIl.Emit(OpCodes.Stloc, indexVariable);
+                            functionIl.Emit(OpCodes.Br, startLabel);
+                            functionIl.Append(endLabel);
+                        }
+                        break;
+                    case BlockStatement blockStatement:
+                        WriteFunctionBody(blockStatement.StackFrame, functionDefinition, functionIl);
                         break;
                     default: throw new NotImplementedException();
                 }
 
-            functionIl.Emit(OpCodes.Ret);
+            if (functionStackFrame.FindParentMember() is FunctionMember)
+                functionIl.Emit(OpCodes.Ret);
         }
 
         void WriteFunctionDeclarationNode(FunctionDeclarationNode functionDeclarationNode, StackFrame stackFrame)
@@ -800,6 +871,11 @@ static partial class CodeGeneration
     }
 
     abstract record Statement() : Member((string?)null);
+    record BlockStatement : Statement;
     record ReturnStatement(ExpressionNode ExpressionNode) : Statement;
+    record ForStatement(string VariableName, ExpressionNode EnumerableNode) : Statement
+    {
+        public BlockStatement? BlockStatement { get; set; }
+    }
     record ExpressionStatement(ExpressionNode ExpressionNode) : Statement;
 }
