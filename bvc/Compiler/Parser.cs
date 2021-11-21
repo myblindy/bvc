@@ -37,6 +37,7 @@ record BinaryExpressionNode(ExpressionNode Left, TokenType Operator, ExpressionN
 }
 record UnaryExpressionNode(TokenType Operator, ExpressionNode Right) : ExpressionNode;
 record LiteralExpressionNode(object Value) : ExpressionNode;
+record StringExpressionNode(ExpressionNode[] Expressions) : ExpressionNode;
 record IdentifierExpressionNode(string Identifier, ExpressionNode[]? GenericParameters = null) : ExpressionNode
 {
     public CodeGeneration.TypeMember[]? InferredGenericParameters { get; set; }
@@ -406,6 +407,21 @@ class Parser
     {
         if (MatchTokenTypes(TokenType.TrueKeyword, TokenType.FalseKeyword) is { } operatorTokenType && operatorTokenType != TokenType.Error)
             return new LiteralExpressionNode(operatorTokenType == TokenType.TrueKeyword);
+        else if (MatchTokenTypes(TokenType.StringBeginning) != TokenType.Error)
+        {
+            var expressions = new List<ExpressionNode>();
+            while (true)
+                if (MatchTokenTypes(TokenType.StringEnding) != TokenType.Error)
+                    return expressions.Count == 1 && expressions[0] is LiteralExpressionNode literalExpressionNode ? literalExpressionNode : new StringExpressionNode(expressions.ToArray());
+                else if (MatchTokenTypes(TokenType.StringLiteral) != TokenType.Error)
+                    expressions.Add(new LiteralExpressionNode(LastMatchedToken!.Text));
+                else if (ParseExpression() is { } expression)
+                {
+                    expressions.Add(expression);
+                    ExpectTokenTypes(TokenType.CloseBrace);
+                    if (lexer.PopInStringToken()) throw new NotImplementedException();
+                }
+        }
         else if (MatchTokenTypes(TokenType.StringLiteral) != TokenType.Error)
             return new LiteralExpressionNode(LastMatchedToken!.Text);
         else if (MatchTokenTypes(TokenType.IntegerLiteral) != TokenType.Error)
@@ -440,7 +456,7 @@ class Parser
                             break;
 
                         var expr = ParseExpression();
-                        if (expr is null) break;
+                        if (expr is null) throw new NotImplementedException();
                         arguments.Add(expr);
                     }
                     ExpectTokenTypes(TokenType.CloseParentheses);
@@ -449,6 +465,21 @@ class Parser
             }
             else
                 return node;
+        }
+        else if (MatchTokenTypes(TokenType.OpenBracket) != TokenType.Error)
+        {
+            var arguments = new List<ExpressionNode>();
+            while (true)
+            {
+                if (arguments.Count > 0 && MatchTokenTypes(TokenType.Comma) == TokenType.Error)
+                    break;
+
+                var expr = ParseExpression();
+                if (expr is null) throw new NotImplementedException();
+                arguments.Add(expr);
+            }
+            ExpectTokenTypes(TokenType.CloseBracket);
+            return new FunctionCallExpressionNode(new IdentifierExpressionNode("List"), arguments.ToArray());
         }
 
         return null;

@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Collections.Generic;
+using System.Text;
 
 namespace bvc.Compiler;
 
@@ -12,8 +13,13 @@ enum TokenType
     DoubleLiteral,
     Identifier,
 
+    StringBeginning,
+    StringEnding,
+
     OpenParentheses,
     CloseParentheses,
+    OpenBracket,
+    CloseBracket,
     OpenBrace,
     CloseBrace,
     SemiColon,
@@ -59,6 +65,8 @@ record SymbolToken : Token
 {
     public SymbolToken(string text, TokenType tokenType) : base(text, tokenType) { }
 }
+
+record StringMarkerToken(TokenType TokenType) : Token("\"", TokenType);
 
 record StringLiteralToken : Token
 {
@@ -133,27 +141,78 @@ class Lexer
     public Transaction? StartTransaction() => transaction is null ? transaction = new(this) : null;
 
     readonly StringBuilder tokenSB = new();
+    readonly Stack<bool> inTokenString = new();
+    bool IsInTokenString => inTokenString.TryPeek(out var res) && res;
+    bool nextTokenIsStringEnd;
+
+    public bool PopInStringToken()
+    {
+        if (inTokenString.Count == 0) throw new NotImplementedException();
+        return inTokenString.Pop();
+    }
+
     Token? GetNextToken()
     {
         const char eof = unchecked((char)-1);
         while (true)
         {
+            if (nextTokenIsStringEnd)
+            {
+                if (!inTokenString.Pop()) throw new InvalidOperationException();
+                nextTokenIsStringEnd = false;
+                return new StringMarkerToken(TokenType.StringEnding);
+            }
+
             var ch = (char)reader.Read();
+
+            if (IsInTokenString)
+            {
+                // parse string parts
+                tokenSB.Clear();
+                tokenSB.Append(ch);
+
+                while (true)
+                {
+                    ch = (char)reader.Peek();
+                    if (ch == '$')
+                    {
+                        reader.Read();
+                        if ((char)reader.Peek() == '{')
+                        {
+                            // end of the literal token, beginning of the expression
+                            reader.Read();
+                            inTokenString.Push(false);
+                            return new StringLiteralToken(tokenSB.ToString());
+                        }
+                        tokenSB.Append(ch);
+                    }
+                    else if (ch is eof or '"')
+                    {
+                        // end of literal token, end of string
+                        nextTokenIsStringEnd = true;
+                        reader.Read();
+                        return new StringLiteralToken(tokenSB.ToString());
+                    }
+                    else
+                    {
+                        tokenSB.Append(ch);
+                        reader.Read();
+                    }
+                }
+            }
 
             if (char.IsWhiteSpace(ch)) continue;
             switch (ch)
             {
                 case eof: return null;
                 case '"':
-                    tokenSB.Clear();
-                    while (true)
+                    if (!IsInTokenString)
                     {
-                        ch = (char)reader.Read();
-                        if (ch is '"' or eof)
-                            return new StringLiteralToken(tokenSB.ToString());
-                        else
-                            tokenSB.Append(ch);
+                        inTokenString.Push(true);
+                        return new StringMarkerToken(TokenType.StringBeginning);
                     }
+                    else
+                        throw new NotImplementedException();
                 case var letterCh when char.IsLetter(ch):
                     {
                         tokenSB.Clear();
@@ -185,6 +244,8 @@ class Lexer
                 case ',': return new SymbolToken(ch.ToString(), TokenType.Comma);
                 case ':': return new SymbolToken(ch.ToString(), TokenType.Colon);
                 case '.': return new SymbolToken(ch.ToString(), TokenType.Dot);
+                case '[': return new SymbolToken(ch.ToString(), TokenType.OpenBracket);
+                case ']': return new SymbolToken(ch.ToString(), TokenType.CloseBracket);
                 case '<' or '>' or '=':
                     {
                         var nextCh = (char)reader.Peek();

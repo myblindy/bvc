@@ -1,5 +1,6 @@
 ﻿using bvc.Compiler;
 using bvc.Support;
+using System.Reflection;
 
 using var stream = new StringStream(@"
 enum Meep { A, B, C, D = 10, E, F }
@@ -7,7 +8,7 @@ enum Arf { A = 9, B = 4, D = 0 }
 
 class D(val s: String);
 
-class C(var a: Integer, var b: String, val c: Double, val arf: Arf, val d: D) {
+class C(var a: Integer, var b: String, val c: Double, val d: D) {
     fun Lst() {
         val lst0 = List<Integer>();
         val lst1 = List(1);
@@ -62,11 +63,11 @@ class C(var a: Integer, var b: String, val c: Double, val arf: Arf, val d: D) {
 class Program
 {
     fun static Main() {
-        var lst = List(1, 2, 3, 4, 5, 10);
-        lst.Add(100);
-
-        for(i in lst)
+        for(i in [1, 2, 3, 4, 5, 10])
             Console.WriteLine(""Found item: ${i}."");
+
+        for(s in [""Dark Souls"", ""Bloodborne"", ""Sekiro""])
+            Console.WriteLine(""So, ${s} is great!"");
     }
 }");
 
@@ -75,5 +76,9 @@ var lexer = new Lexer(stream);
 var parser = new Parser(lexer);
 var rootNode = parser.Parse();
 
-using var outputStream = File.OpenWrite("out.dll");
-CodeGeneration.Generate(rootNode!, outputStream, "out");
+using (var outputStream = File.OpenWrite("out.dll"))
+    CodeGeneration.Generate(rootNode!, outputStream, "out");
+
+var outAssembly = Assembly.LoadFile(Path.GetFullPath("out.dll"));
+var mainMethod = outAssembly.EntryPoint!;
+mainMethod.Invoke(null, null);

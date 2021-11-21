@@ -3,6 +3,7 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
 using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics.Metrics;
 
 namespace bvc.Compiler;
 
@@ -95,6 +96,7 @@ static partial class CodeGeneration
                 constructorIl.Emit(OpCodes.Ldarg_0);
                 constructorIl.Emit(OpCodes.Newobj, TypeHelpers.DefaultCtorFor(listReference));
                 constructorIl.Emit(OpCodes.Stfld, genericListDef);
+
                 constructorIl.Emit(OpCodes.Ldarg_0);
                 constructorIl.Emit(OpCodes.Ldfld, genericListDef);
                 constructorIl.Emit(OpCodes.Ldarg_1);
@@ -125,6 +127,7 @@ static partial class CodeGeneration
                 countIl.Emit(OpCodes.Ldarg_0);
                 countIl.Emit(OpCodes.Ldfld, genericListDef);
                 countIl.Emit(OpCodes.Callvirt, module.ImportReference(listReference.ElementType.Resolve().Methods.First(m => m.Name == "get_Count")).MakeGeneric(baseListGenericParameters));
+                countIl.Emit(OpCodes.Conv_I8);
                 countIl.Emit(OpCodes.Ret);
             },
             Members =
@@ -207,6 +210,9 @@ static partial class CodeGeneration
                     if (inferredGenericParameters is not null && functionCallExpressionNode.Expression is IdentifierExpressionNode identifierExpressionNode2)
                         identifierExpressionNode2.InferredGenericParameters = inferredGenericParameters.ToArray();
                     return returnType.AsGeneric(functionCallExpressionNode.Expression, stackFrame);
+
+                case StringExpressionNode:
+                    return StringClassDeclaration;
             }
 
             throw new NotImplementedException();
@@ -400,6 +406,7 @@ static partial class CodeGeneration
                         {
                             // get the components required for enumeration
                             var enumerableType = ParseExpressionNodeTypeField(forStatement.EnumerableNode, forStatement.StackFrame);
+                            var enumerableGenericParameters = enumerableType.StackFrame.GenericTypeMembers?.Select(w => (TypeReference)w.StackFrame.MemberReference!).ToArray();
 
                             // store the count in a variable
                             var countVariableMember = enumerableType.StackFrame.Find<VariableMember>("Count", false);
@@ -407,8 +414,16 @@ static partial class CodeGeneration
                             var countVariable = new VariableDefinition((TypeReference)countVariableMember.Type!.StackFrame.MemberReference!);
                             functionDefinition.Body.Variables.Add(countVariable);
 
-                            WriteExpressionNode(new BinaryExpressionNode(forStatement.EnumerableNode, TokenType.Dot, new IdentifierExpressionNode("Count")),
-                                functionIl, forStatement.StackFrame);
+                            // store the enumerable
+                            var enumerableDefinition = new VariableDefinition((TypeReference)enumerableType.StackFrame.MemberReference!);
+                            functionDefinition.Body.Variables.Add(enumerableDefinition);
+                            WriteExpressionNode(forStatement.EnumerableNode, functionIl, forStatement.StackFrame);
+                            functionIl.Emit(OpCodes.Dup);
+                            functionIl.Emit(OpCodes.Stloc, enumerableDefinition);
+
+                            // store the count
+                            functionIl.Emit(OpCodes.Callvirt, module!.ImportReference(((TypeReference)enumerableType.StackFrame.MemberReference!).Resolve().Methods.First(m => m.Name == "get_Count"))
+                                .MakeGeneric(enumerableGenericParameters));
                             functionIl.Emit(OpCodes.Stloc, countVariable);
 
                             // get(long) gives us the variable type
@@ -435,13 +450,17 @@ static partial class CodeGeneration
                             functionIl.Emit(OpCodes.Brfalse, endLabel);
 
                             // process
+                            functionIl.Emit(OpCodes.Ldloc, enumerableDefinition);
+                            functionIl.Emit(OpCodes.Ldloc, indexVariable);
+                            functionIl.Emit(OpCodes.Callvirt, module!.ImportReference(((TypeReference)enumerableType.StackFrame.MemberReference!).Resolve().Methods.First(m => m.Name == "Get"))
+                                .MakeGeneric(enumerableGenericParameters));
+                            functionIl.Emit(OpCodes.Stloc, iteratorVariable);
                             WriteFunctionBody(forStatement.StackFrame, functionDefinition, functionIl);
 
                             // iterate
                             functionIl.Emit(OpCodes.Ldloc, indexVariable);
                             functionIl.Emit(OpCodes.Ldc_I8, 1L);
                             functionIl.Emit(OpCodes.Add);
-                            //functionIl.Emit(OpCodes.Dup);
                             functionIl.Emit(OpCodes.Stloc, indexVariable);
                             functionIl.Emit(OpCodes.Br, startLabel);
                             functionIl.Append(endLabel);
@@ -566,6 +585,21 @@ static partial class CodeGeneration
                         case string stringValue: ilProcessor.Emit(OpCodes.Ldstr, stringValue); return StringClassDeclaration;
                         default: throw new NotImplementedException();
                     }
+                case StringExpressionNode stringExpressionNode:
+                    ilProcessor.Emit(OpCodes.Ldc_I4, stringExpressionNode.Expressions.Length);
+                    ilProcessor.Emit(OpCodes.Newarr, module!.TypeSystem.Object);
+
+                    int idx = 0;
+                    foreach (var node in stringExpressionNode.Expressions)
+                    {
+                        ilProcessor.Emit(OpCodes.Dup);
+                        ilProcessor.Emit(OpCodes.Ldc_I4, idx++);
+                        if (WriteExpressionNode(node, ilProcessor, stackFrame) is { } retType && (retType == IntegerClassDeclaration || retType == DoubleClassDeclaration))
+                            ilProcessor.Emit(OpCodes.Box, (TypeReference)retType.StackFrame.MemberReference!);
+                        ilProcessor.Emit(OpCodes.Stelem_Ref);
+                    }
+                    ilProcessor.Emit(OpCodes.Call, module.ImportReference(module!.TypeSystem.String.Resolve().Methods.First(w => w.Name == "Concat" && w.Parameters.Count == 1 && w.Parameters[0].ParameterType.IsArray)));
+                    return StringClassDeclaration;
                 case GroupingExpressionNode groupingExpressionNode:
                     return WriteExpressionNode(groupingExpressionNode.Expression, ilProcessor, stackFrame);
                 case UnaryExpressionNode unaryExpressionNode:
@@ -586,21 +620,32 @@ static partial class CodeGeneration
                             // dot expression
                             var targetMember = leftTypeField!.StackFrame.Find<Member>(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier, false);
 
+                            void call(MethodReference methodReference)
+                            {
+                                if (leftTypeField!.StackFrame.GenericTypeMembers?.Any() == true)
+                                {
+                                    var originalParameters = methodReference.Parameters;
+                                    methodReference = new MethodReference(methodReference.Name, methodReference.ReturnType)
+                                    {
+                                        DeclaringType = (TypeReference)leftTypeField.StackFrame.MemberReference!,
+                                        HasThis = methodReference.HasThis,
+                                        ExplicitThis = methodReference.ExplicitThis,
+                                    };
+                                    foreach (var p in originalParameters)
+                                        methodReference.Parameters.Add(p);
+                                }
+
+                                ilProcessor.Emit(OpCodes.Callvirt, methodReference);
+                            }
+
                             switch (targetMember)
                             {
                                 case VariableMember variableMember:
-                                    {
-                                        var getMethod = (MethodReference)((PropertyDefinition)variableMember.StackFrame.MemberReference!).GetMethod;
-                                        if (leftTypeField.StackFrame.GenericTypeMembers?.Any() == true)
-                                            getMethod = new MethodReference(getMethod.Name, getMethod.ReturnType)
-                                            {
-                                                DeclaringType = (TypeReference)leftTypeField.StackFrame.MemberReference!,
-                                                HasThis = getMethod.HasThis,
-                                                ExplicitThis = getMethod.ExplicitThis
-                                            };
-                                        ilProcessor.Emit(OpCodes.Callvirt, getMethod);
-                                        return variableMember.Type!;
-                                    }
+                                    call(((PropertyDefinition)variableMember.StackFrame.MemberReference!).GetMethod);
+                                    return variableMember.Type!;
+                                case FunctionMember functionMember1:
+                                    call((MethodDefinition)functionMember1.StackFrame.MemberReference!);
+                                    return functionMember1.ReturnType;
                                 default:
                                     throw new NotImplementedException();
                             }
@@ -728,8 +773,8 @@ static partial class CodeGeneration
                             {
                                 ilProcessor.Emit(OpCodes.Dup);
                                 ilProcessor.Emit(OpCodes.Ldc_I4, argIdx2);
-                                WriteExpressionNode(functionCallExpressionNode.Arguments[argIdx++], ilProcessor, stackFrame);
-                                ilProcessor.Emit(OpCodes.Stelem_I4);
+                                var typeMember = WriteExpressionNode(functionCallExpressionNode.Arguments[argIdx++], ilProcessor, stackFrame);
+                                ilProcessor.Emit(typeMember == IntegerClassDeclaration ? OpCodes.Stelem_I8 : OpCodes.Stelem_Ref);
                             }
 
                             --argIdx;
@@ -738,7 +783,7 @@ static partial class CodeGeneration
                             WriteExpressionNode(functionCallExpressionNode.Arguments[argIdx], ilProcessor, stackFrame);
                     }
 
-                    ilProcessor.Emit(functionMember.IsConstructor ? OpCodes.Newobj : OpCodes.Call, methodReference);
+                    ilProcessor.Emit(functionMember.IsConstructor ? OpCodes.Newobj : methodReference.Resolve().IsVirtual ? OpCodes.Callvirt : OpCodes.Call, methodReference);
                     return functionMember.ReturnType;
 
                 default: throw new NotImplementedException();

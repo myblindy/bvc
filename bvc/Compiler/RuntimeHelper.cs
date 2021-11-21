@@ -28,6 +28,8 @@ namespace Cecilifier.Runtime
 
         public static MethodReference MakeGeneric(this MethodReference self, params TypeReference[] arguments)
         {
+            if (arguments is null) return self;
+
             var reference = new MethodReference(self.Name, self.ReturnType)
             {
                 DeclaringType = self.DeclaringType.MakeGenericType(arguments),
@@ -256,9 +258,7 @@ namespace Cecilifier.Runtime
         public static void FixReferences(ModuleDefinition mainModule)
         {
             foreach (var t in mainModule.GetAllTypes())
-            {
                 FixType(t, mainModule);
-            }
 
             var toBeRemoved = mainModule.AssemblyReferences.Where(a => a.Name == "mscorlib").ToArray();
             foreach (var tbr in toBeRemoved)
