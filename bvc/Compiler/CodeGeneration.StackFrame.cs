@@ -50,7 +50,7 @@ partial class CodeGeneration
 
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
-        public StackFrame Add(Member member, MemberReference? memberReference = null)
+        public StackFrame Add(Member member, object? memberReference = null)
         {
             StackFrame newStackFrame = new(this) { MemberReference = memberReference };
             members.Add((member, newStackFrame));

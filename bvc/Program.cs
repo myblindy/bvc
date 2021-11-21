@@ -75,5 +75,5 @@ var lexer = new Lexer(stream);
 var parser = new Parser(lexer);
 var rootNode = parser.Parse();
 
-using var outputStream = File.OpenWrite("out.exe");
+using var outputStream = File.OpenWrite("out.dll");
 CodeGeneration.Generate(rootNode!, outputStream, "out");

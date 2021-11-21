@@ -79,41 +79,52 @@ static partial class CodeGeneration
         {
             CustomCode = def =>
             {
-                var listReference = module.ImportReference(typeof(List<>)).MakeGenericInstanceType(def.GenericParameters[0]);
+                var baseListReference = module.ImportReference(typeof(List<>));
+                var baseListGenericParameters = baseListReference.GenericParameters.ToArray();
+                var listReference = baseListReference.MakeGenericInstanceType(def.GenericParameters[0]);
                 var listDef = new FieldDefinition("list", FieldAttributes.Private, listReference);
                 def.Fields.Add(listDef);
+
+                var listDefGenericDeclaringType = new GenericInstanceType(listDef.DeclaringType);
+                foreach (var parameter in listDef.DeclaringType.GenericParameters)
+                    listDefGenericDeclaringType.GenericArguments.Add(parameter);
+                var genericListDef = new FieldReference(listDef.Name, listDef.FieldType) { DeclaringType = listDefGenericDeclaringType };
 
                 var constructorDef = def.GetConstructors().First();
                 var constructorIl = constructorDef.Body.GetILProcessor();
                 constructorIl.Emit(OpCodes.Ldarg_0);
                 constructorIl.Emit(OpCodes.Newobj, TypeHelpers.DefaultCtorFor(listReference));
-                constructorIl.Emit(OpCodes.Stfld, listDef);
+                constructorIl.Emit(OpCodes.Stfld, genericListDef);
+                constructorIl.Emit(OpCodes.Ldarg_0);
+                constructorIl.Emit(OpCodes.Ldfld, genericListDef);
+                constructorIl.Emit(OpCodes.Ldarg_1);
+                constructorIl.Emit(OpCodes.Callvirt, module.ImportReference(listReference.ElementType.Resolve().Methods.First(m => m.Name == "AddRange")).MakeGeneric(baseListGenericParameters));
 
                 var addDef = def.Methods.First(m => m.Name == "Add");
                 addDef.Body.Instructions.Clear();
                 var addIl = addDef.Body.GetILProcessor();
                 addIl.Emit(OpCodes.Ldarg_0);
-                addIl.Emit(OpCodes.Ldfld, listDef);
+                addIl.Emit(OpCodes.Ldfld, genericListDef);
                 addIl.Emit(OpCodes.Ldarg_1);
-                addIl.Emit(OpCodes.Callvirt, module.ImportReference(listReference.ElementType.Resolve().Methods.First(m => m.Name == "Add")));
+                addIl.Emit(OpCodes.Callvirt, module.ImportReference(listReference.ElementType.Resolve().Methods.First(m => m.Name == "Add")).MakeGeneric(baseListGenericParameters));
                 addIl.Emit(OpCodes.Ret);
 
                 var getDef = def.Methods.First(m => m.Name == "Get");
                 getDef.Body.Instructions.Clear();
                 var getIl = getDef.Body.GetILProcessor();
                 getIl.Emit(OpCodes.Ldarg_0);
-                getIl.Emit(OpCodes.Ldfld, listDef);
+                getIl.Emit(OpCodes.Ldfld, genericListDef);
                 getIl.Emit(OpCodes.Ldarg_1);
                 getIl.Emit(OpCodes.Conv_I4);
-                getIl.Emit(OpCodes.Callvirt, module.ImportReference(listReference.ElementType.Resolve().Methods.First(m => m.Name == "get_Item")));
+                getIl.Emit(OpCodes.Callvirt, module.ImportReference(listReference.ElementType.Resolve().Methods.First(m => m.Name == "get_Item")).MakeGeneric(baseListGenericParameters));
                 getIl.Emit(OpCodes.Ret);
 
                 var countDef = def.Properties.First(p => p.Name == "Count");
                 countDef.GetMethod.Body.Instructions.Clear();
                 var countIl = countDef.GetMethod.Body.GetILProcessor();
                 countIl.Emit(OpCodes.Ldarg_0);
-                countIl.Emit(OpCodes.Ldfld, listDef);
-                countIl.Emit(OpCodes.Callvirt, module.ImportReference(listReference.ElementType.Resolve().Methods.First(m => m.Name == "get_Count")));
+                countIl.Emit(OpCodes.Ldfld, genericListDef);
+                countIl.Emit(OpCodes.Callvirt, module.ImportReference(listReference.ElementType.Resolve().Methods.First(m => m.Name == "get_Count")).MakeGeneric(baseListGenericParameters));
                 countIl.Emit(OpCodes.Ret);
             },
             Members =
@@ -404,12 +415,16 @@ static partial class CodeGeneration
                             var getFunctionMember = enumerableType.StackFrame.FindFunction("Get", null, out var getInferredParameters, new[] { IntegerClassDeclaration }, false);
                             if (getFunctionMember is null) throw new NotImplementedException();
                             var getTypeMember = ResolveGenericTypeMember(getFunctionMember.ReturnType!, enumerableType.StackFrame.GenericTypeMembers);
+
                             var iteratorVariable = new VariableDefinition((TypeReference)getTypeMember!.StackFrame.MemberReference!);
                             functionDefinition.Body.Variables.Add(iteratorVariable);
+                            forStatement.StackFrame.Add(new VariableMember(TokenType.None, forStatement.VariableName, getTypeMember), iteratorVariable);
 
                             // for loop intro
                             var indexVariable = new VariableDefinition(module!.TypeSystem.Int64);
                             functionDefinition.Body.Variables.Add(indexVariable);
+                            functionIl.Emit(OpCodes.Ldc_I8, 0L);
+                            functionIl.Emit(OpCodes.Stloc, indexVariable);
 
                             // condition check
                             var endLabel = functionIl.Create(OpCodes.Nop);
@@ -575,7 +590,15 @@ static partial class CodeGeneration
                             {
                                 case VariableMember variableMember:
                                     {
-                                        ilProcessor.Emit(OpCodes.Callvirt, ((PropertyDefinition)variableMember.StackFrame.MemberReference!).GetMethod);
+                                        var getMethod = (MethodReference)((PropertyDefinition)variableMember.StackFrame.MemberReference!).GetMethod;
+                                        if (leftTypeField.StackFrame.GenericTypeMembers?.Any() == true)
+                                            getMethod = new MethodReference(getMethod.Name, getMethod.ReturnType)
+                                            {
+                                                DeclaringType = (TypeReference)leftTypeField.StackFrame.MemberReference!,
+                                                HasThis = getMethod.HasThis,
+                                                ExplicitThis = getMethod.ExplicitThis
+                                            };
+                                        ilProcessor.Emit(OpCodes.Callvirt, getMethod);
                                         return variableMember.Type!;
                                     }
                                 default:
@@ -738,8 +761,8 @@ static partial class CodeGeneration
         }
         WriteDeclarations(rootNode, mainStackFrame);
 
-        PrivateCoreLibFixer.FixReferences(module);
         module.Architecture = TargetArchitecture.AMD64;
+        PrivateCoreLibFixer.FixReferences(module);
         assembly.Write(stream);
     }
 
