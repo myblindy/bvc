@@ -38,6 +38,7 @@ enum TokenType
     EqualsEquals,
     Not,
     Dot,
+    DotDot,
 
     IfKeyword,
     TrueKeyword,
@@ -144,6 +145,7 @@ class Lexer
     readonly Stack<bool> inTokenString = new();
     bool IsInTokenString => inTokenString.TryPeek(out var res) && res;
     bool nextTokenIsStringEnd;
+    (long end, bool firstPart)? nextTokenIsRangeEnd;
 
     public bool PopInStringToken()
     {
@@ -163,10 +165,29 @@ class Lexer
                 return new StringMarkerToken(TokenType.StringEnding);
             }
 
+            if (nextTokenIsRangeEnd is not null)
+                if (nextTokenIsRangeEnd.Value.firstPart)
+                {
+                    nextTokenIsRangeEnd = (nextTokenIsRangeEnd.Value.end, false);
+                    return new SymbolToken("..", TokenType.DotDot);
+                }
+                else
+                {
+                    (nextTokenIsRangeEnd, var end) = (null, nextTokenIsRangeEnd!.Value.end);
+                    return new IntegerLiteralToken(end);
+                }
+
             var ch = (char)reader.Read();
 
             if (IsInTokenString)
             {
+                if (ch is eof or '"')
+                {
+                    // end of literal token, end of string
+                    nextTokenIsStringEnd = true;
+                    return new StringLiteralToken("");
+                }
+
                 // parse string parts
                 tokenSB.Clear();
                 tokenSB.Append(ch);
@@ -243,7 +264,13 @@ class Lexer
                 case '/': return new SymbolToken(ch.ToString(), TokenType.Slash);
                 case ',': return new SymbolToken(ch.ToString(), TokenType.Comma);
                 case ':': return new SymbolToken(ch.ToString(), TokenType.Colon);
-                case '.': return new SymbolToken(ch.ToString(), TokenType.Dot);
+                case '.':
+                    if ((char)reader.Peek() == '.')
+                    {
+                        reader.Read();
+                        return new SymbolToken("..", TokenType.DotDot);
+                    }
+                    return new SymbolToken(ch.ToString(), TokenType.Dot);
                 case '[': return new SymbolToken(ch.ToString(), TokenType.OpenBracket);
                 case ']': return new SymbolToken(ch.ToString(), TokenType.CloseBracket);
                 case '<' or '>' or '=':
@@ -291,7 +318,7 @@ class Lexer
                         {
                             var nextCh = (char)reader.Peek();
 
-                            if (char.IsDigit(nextCh) || nextCh == '.')
+                            if (char.IsDigit(nextCh) || (!hasDot || hasDot && ((tokenSB.Length == 1 && tokenSB[^1] == '.') || tokenSB.Length >= 2 && tokenSB[^1] == '.' && tokenSB[^2] != '.')) && nextCh == '.')
                             {
                                 reader.Read();
                                 tokenSB.Append(nextCh);
@@ -302,6 +329,11 @@ class Lexer
                         }
 
                         var token = tokenSB.ToString();
+                        if (token.IndexOf("..") is { } dotDotIndex && dotDotIndex >= 0)
+                        {
+                            nextTokenIsRangeEnd = (int.Parse(token.AsSpan(dotDotIndex + 2)), true);
+                            return new IntegerLiteralToken(int.Parse(token.AsSpan(0, dotDotIndex)));
+                        }
                         if (hasDot && double.TryParse(token, out var doubleValue))
                             return new DoubleLiteralToken(token, doubleValue);
                         else if (!hasDot && long.TryParse(token, out var intValue))

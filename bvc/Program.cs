@@ -60,14 +60,23 @@ class C(var a: Integer, var b: String, val c: Double, val d: D) {
     }
 }
 
-class Program
-{
+class Program {
     fun static Main() {
+        Console.WriteLine(""1 + 2 / 5 = ${1.0 + 2.0 / 5.0}"");
+    
         for(i in [1, 2, 3, 4, 5, 10])
             Console.WriteLine(""Found item: ${i}."");
 
         for(s in [""Dark Souls"", ""Bloodborne"", ""Sekiro""])
             Console.WriteLine(""So, ${s} is great!"");
+
+        for(i in 0..40)
+            Console.Write("" ${i} "");
+
+        Console.WriteLine("""");
+
+        var r = 1..10;
+        Console.WriteLine(""1..10 is between ${r.Start} and ${r.End}."");
     }
 }");
 

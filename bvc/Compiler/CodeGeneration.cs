@@ -139,8 +139,43 @@ static partial class CodeGeneration
             }
         });
 
+        // Range implementation
+        rootNode.Members.Insert(0, new ClassDeclarationNode("Range")
+        {
+            CustomCode = def =>
+            {
+                var getDef = def.Methods.First(m => m.Name == "Get");
+                getDef.Body.Instructions.Clear();
+                var getIl = getDef.Body.GetILProcessor();
+                getIl.Emit(OpCodes.Ldarg_0);
+                getIl.Emit(OpCodes.Ldfld, def.Fields.First(f => f.Name.Contains("Start__")));
+                getIl.Emit(OpCodes.Ldarg_1);
+                getIl.Emit(OpCodes.Add);
+                getIl.Emit(OpCodes.Ret);
+
+                var countDef = def.Properties.First(p => p.Name == "Count");
+                countDef.GetMethod.Body.Instructions.Clear();
+                var countIl = countDef.GetMethod.Body.GetILProcessor();
+                countIl.Emit(OpCodes.Ldarg_0);
+                countIl.Emit(OpCodes.Ldfld, def.Fields.First(f => f.Name.Contains("End__")));
+                countIl.Emit(OpCodes.Ldarg_0);
+                countIl.Emit(OpCodes.Ldfld, def.Fields.First(f => f.Name.Contains("Start__")));
+                countIl.Emit(OpCodes.Sub);
+                countIl.Emit(OpCodes.Ldc_I8, 1L);
+                countIl.Emit(OpCodes.Add);
+                countIl.Emit(OpCodes.Ret);
+
+            },
+            Members =
+            {
+                new FunctionDeclarationNode(TokenType.None, FunctionDeclarationNode.PrimaryConstructorName, null, new[] { (TokenType.ValKeyword, "Start", "Integer"), (TokenType.ValKeyword, "End", "Integer") }),
+                new FunctionDeclarationNode(TokenType.None, "Get", new("Integer"), new[] { (TokenType.None, "index", "Integer") }),
+                new VariableDeclarationNode(TokenType.ValPureKeyword, "Count", new("Integer"), null, null),
+            }
+        });
+
         // Console implementation
-        rootNode.Members.Insert(1, new ClassDeclarationNode("Console")
+        rootNode.Members.Insert(0, new ClassDeclarationNode("Console")
         {
             CustomCode = def =>
             {

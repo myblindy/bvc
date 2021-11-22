@@ -307,6 +307,7 @@ class Parser
                     else
                         ParseMembers(body, MemberType.Function, true);
 
+                    foundAny = true;
                     node.Members.Add(new ForStatementNode(id, expr, body));
                     if (onlyOne) return;
                 }
@@ -400,7 +401,23 @@ class Parser
             return new UnaryExpressionNode(operatorTokenType, right);
         }
 
-        return ParsePrimaryExpression();
+        return ParseRangeExpression();
+    }
+
+    ExpressionNode? ParseRangeExpression()
+    {
+        var left = ParsePrimaryExpression();
+        if (left is null) return null;
+
+        while (MatchTokenTypes(TokenType.DotDot) is not TokenType.Error)
+        {
+            var right = ParsePrimaryExpression();
+            if (right is null) throw new NotImplementedException();
+
+            left = new FunctionCallExpressionNode(new IdentifierExpressionNode("Range"), new[] { left, right });
+        }
+
+        return left;
     }
 
     ExpressionNode? ParsePrimaryExpression()
