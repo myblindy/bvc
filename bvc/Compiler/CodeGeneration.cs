@@ -180,20 +180,23 @@ static partial class CodeGeneration
             CustomCode = def =>
             {
                 foreach (var name in new[] { "Write", "WriteLine" })
-                {
-                    var writeDef = def.Methods.First(n => n.Name == name)!;
-                    writeDef.Body.Instructions.Clear();
-                    var writeIl = writeDef.Body.GetILProcessor();
-                    writeIl.Emit(OpCodes.Ldarg_0); // no this, first argument
-                    writeIl.Emit(OpCodes.Call, module.ImportReference(TypeHelpers.ResolveMethod("System.Console", "System.Console", name,
-                        System.Reflection.BindingFlags.Default | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public, "", "System.String")));
-                    writeIl.Emit(OpCodes.Ret);
-                }
+                    foreach (var writeDef in def.Methods.Where(n => n.Name == name))
+                    {
+                        writeDef.Body.Instructions.Clear();
+                        var writeIl = writeDef.Body.GetILProcessor();
+                        if (writeDef.Parameters.Count > 0)
+                            writeIl.Emit(OpCodes.Ldarg_0); // no this, first argument
+                        writeIl.Emit(OpCodes.Call, module.ImportReference(TypeHelpers.ResolveMethod("System.Console", "System.Console", name,
+                            System.Reflection.BindingFlags.Default | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public, "",
+                            writeDef.Parameters.Count > 0 ? new[] { "System.String" } : Array.Empty<string>())));
+                        writeIl.Emit(OpCodes.Ret);
+                    }
             },
             Members =
             {
                 new FunctionDeclarationNode(TokenType.StaticKeyword, "Write", null, new[] { (TokenType.None, "s", "String") } ),
                 new FunctionDeclarationNode(TokenType.StaticKeyword, "WriteLine", null, new[] { (TokenType.None, "s", "String") } ),
+                new FunctionDeclarationNode(TokenType.StaticKeyword, "WriteLine", null, Array.Empty<(TokenType, string, string)>() ),
             }
         });
 
@@ -676,7 +679,13 @@ static partial class CodeGeneration
                             switch (targetMember)
                             {
                                 case VariableMember variableMember:
-                                    call(((PropertyDefinition)variableMember.StackFrame.MemberReference!).GetMethod);
+                                    if (variableMember.StackFrame.MemberReference is PropertyDefinition propertyDefinition)
+                                        call(propertyDefinition.GetMethod);
+                                    else
+                                    {
+                                        var fieldDefinition = (FieldDefinition)variableMember.StackFrame.MemberReference!;
+                                        ilProcessor.Emit(OpCodes.Ldfld, fieldDefinition);
+                                    }
                                     return variableMember.Type!;
                                 case FunctionMember functionMember1:
                                     call((MethodDefinition)functionMember1.StackFrame.MemberReference!);
@@ -814,8 +823,8 @@ static partial class CodeGeneration
 
                             --argIdx;
                         }
-                        else
-                            WriteExpressionNode(functionCallExpressionNode.Arguments[argIdx], ilProcessor, stackFrame);
+                        else if (WriteExpressionNode(functionCallExpressionNode.Arguments[argIdx], ilProcessor, stackFrame) == IntegerClassDeclaration && parameter.Type == DoubleClassDeclaration)
+                            ilProcessor.Emit(OpCodes.Conv_R8);
                     }
 
                     ilProcessor.Emit(functionMember.IsConstructor ? OpCodes.Newobj : methodReference.Resolve().IsVirtual ? OpCodes.Callvirt : OpCodes.Call, methodReference);

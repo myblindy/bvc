@@ -73,10 +73,23 @@ class Program {
         for(i in 0..40)
             Console.Write("" ${i} "");
 
-        Console.WriteLine("""");
+        Console.WriteLine();
 
         var r = 1..10;
         Console.WriteLine(""1..10 is between ${r.Start} and ${r.End}."");
+
+        var c = C(1, ""moop"", 5.1, D(""d instance string thingie""));
+        Console.WriteLine(""c.Add(1.1, 5.5) = ${c.Add(1.1, 5.5)}"");
+        Console.WriteLine(""c.ShortAdd(1.1, 5.5) = ${c.ShortAdd(1.1, 5.5)}"");
+        Console.WriteLine(""c.Meep() = ${c.Meep()}"");
+        Console.WriteLine(""c.ShortMeep() = ${c.ShortMeep()}"");
+        Console.WriteLine(""c.Fancy() = ${c.Fancy()}"");
+        Console.WriteLine(""c.Fancy2() = ${c.Fancy2()}"");
+        Console.WriteLine(""c.D() = ${c.D()}"");
+        Console.WriteLine(""c.DNameFn() = ${c.DNameFn()}"");
+        Console.WriteLine(""c.DNameVal = ${c.DNameVal}"");
+        Console.WriteLine(""c.DNameGet = ${c.DNameGet}"");
+        Console.WriteLine(""c.P = ${c.P}"");
     }
 }");
 

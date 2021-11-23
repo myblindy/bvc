@@ -147,7 +147,7 @@ partial class CodeGeneration
                         while (pIdx < parameters.Length && parameters[pIdx].IsAssignableTo(destType)) ++pIdx;
                         --pIdx;
                     }
-                    else if (!(parameterVariableMembers[pvmIdx].Type switch
+                    else if (pIdx >= parameters.Length || !(parameterVariableMembers[pvmIdx].Type switch
                     {
                         GenericTypeMember genericTypeMember => allGenericParameters[getGenericMemberIndex(genericTypeMember)],
                         _ => parameterVariableMembers[pvmIdx].Type!
