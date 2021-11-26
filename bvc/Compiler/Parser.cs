@@ -461,6 +461,26 @@ class Parser
         else if (MatchTokenTypes(TokenType.Identifier) != TokenType.Error)
         {
             ExpressionNode node = ParseIdentifierExpressionNode(true)!;
+            return decorateNode(node);
+        }
+        else if (MatchTokenTypes(TokenType.OpenBracket) != TokenType.Error)
+        {
+            var arguments = new List<ExpressionNode>();
+            while (true)
+            {
+                if (arguments.Count > 0 && MatchTokenTypes(TokenType.Comma) == TokenType.Error)
+                    break;
+
+                var expr = ParseExpression();
+                if (expr is null) throw new NotImplementedException();
+                arguments.Add(expr);
+            }
+            ExpectTokenTypes(TokenType.CloseBracket);
+            return decorateNode(new FunctionCallExpressionNode(new IdentifierExpressionNode("List"), arguments.ToArray()));
+        }
+
+        ExpressionNode decorateNode(ExpressionNode node)
+        {
             var oldNode = node;
 
             do
@@ -515,21 +535,6 @@ class Parser
             } while (node != oldNode);
 
             return node;
-        }
-        else if (MatchTokenTypes(TokenType.OpenBracket) != TokenType.Error)
-        {
-            var arguments = new List<ExpressionNode>();
-            while (true)
-            {
-                if (arguments.Count > 0 && MatchTokenTypes(TokenType.Comma) == TokenType.Error)
-                    break;
-
-                var expr = ParseExpression();
-                if (expr is null) throw new NotImplementedException();
-                arguments.Add(expr);
-            }
-            ExpectTokenTypes(TokenType.CloseBracket);
-            return new FunctionCallExpressionNode(new IdentifierExpressionNode("List"), arguments.ToArray());
         }
 
         return null;

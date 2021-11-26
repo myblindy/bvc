@@ -5,14 +5,7 @@ using System.Reflection;
 using var stream = new StringStream(@"
 class Program {
     fun static Main() {
-        for(d in [D(""moop"", 15), D(""maep"", 25), D(""meep"", -1)])
-            Console.WriteLine(""d.A = ${d.A}, d.B = ${d.B}"");
-        
-        val l = [1, 3, 5];
-        Console.Write(""l ="");
-        for(v in l) Console.Write("" ${v}"");
-        Console.WriteLine();
-        Console.WriteLine(""l[1] = ${l[1]}"");
+        val v = [1, 3, 5][2];
     }
 }
 

@@ -235,6 +235,8 @@ partial class CodeGeneration
                         : leftType.StackFrame.Find<Member>(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier, false);
                     return rightMember;
                 }
+                else if (expression is FunctionCallExpressionNode functionCallExpressionNode)
+                    return stackFrame.FindFunction(functionCallExpressionNode, out newInferredGenericParameters, functionCallExpressionNode.Arguments);
                 newInferredGenericParameters = null;
                 return null;
             }
