@@ -429,7 +429,13 @@ class Parser
             var expressions = new List<ExpressionNode>();
             while (true)
                 if (MatchTokenTypes(TokenType.StringEnding) != TokenType.Error)
-                    return expressions.Count == 1 && expressions[0] is LiteralExpressionNode literalExpressionNode ? literalExpressionNode : new StringExpressionNode(expressions.ToArray());
+                {
+                    if (expressions.Count == 1 && expressions[0] is LiteralExpressionNode literalExpressionNode)
+                        return literalExpressionNode;
+                    var usefulCheck = (ExpressionNode e) => !(e is LiteralExpressionNode l && l.Value is string s && string.IsNullOrEmpty(s));
+                    var usefulCount = expressions.Count(usefulCheck);
+                    return usefulCount == 0 ? new LiteralExpressionNode("") : new StringExpressionNode(expressions.Where(usefulCheck).ToArray());
+                }
                 else if (MatchTokenTypes(TokenType.StringLiteral) != TokenType.Error)
                     expressions.Add(new LiteralExpressionNode(LastMatchedToken!.Text));
                 else if (ParseExpression() is { } expression)
@@ -455,33 +461,60 @@ class Parser
         else if (MatchTokenTypes(TokenType.Identifier) != TokenType.Error)
         {
             ExpressionNode node = ParseIdentifierExpressionNode(true)!;
-            while (MatchTokenTypes(TokenType.Dot) != TokenType.Error)
-            {
-                ExpectTokenTypes(TokenType.Identifier);
-                node = new BinaryExpressionNode(node, TokenType.Dot, new IdentifierExpressionNode(LastMatchedToken!.Text));
-            }
+            var oldNode = node;
 
-            if (MatchTokenTypes(TokenType.OpenParentheses) != TokenType.Error)
+            do
             {
-                // function call
-                var arguments = new List<ExpressionNode>();
-                if (MatchTokenTypes(TokenType.CloseParentheses) == TokenType.Error)
+                oldNode = node;
+
+                while (MatchTokenTypes(TokenType.Dot) != TokenType.Error)
                 {
-                    while (true)
-                    {
-                        if (arguments.Count > 0 && MatchTokenTypes(TokenType.Comma) == TokenType.Error)
-                            break;
-
-                        var expr = ParseExpression();
-                        if (expr is null) throw new NotImplementedException();
-                        arguments.Add(expr);
-                    }
-                    ExpectTokenTypes(TokenType.CloseParentheses);
+                    ExpectTokenTypes(TokenType.Identifier);
+                    node = new BinaryExpressionNode(node, TokenType.Dot, new IdentifierExpressionNode(LastMatchedToken!.Text));
                 }
-                return new FunctionCallExpressionNode(node, arguments.ToArray());
-            }
-            else
-                return node;
+
+                while (MatchTokenTypes(TokenType.OpenParentheses) != TokenType.Error)
+                {
+                    // function call
+                    var arguments = new List<ExpressionNode>();
+                    if (MatchTokenTypes(TokenType.CloseParentheses) == TokenType.Error)
+                    {
+                        while (true)
+                        {
+                            if (arguments.Count > 0 && MatchTokenTypes(TokenType.Comma) == TokenType.Error)
+                                break;
+
+                            var expr = ParseExpression();
+                            if (expr is null) throw new NotImplementedException();
+                            arguments.Add(expr);
+                        }
+                        ExpectTokenTypes(TokenType.CloseParentheses);
+                    }
+                    node = new FunctionCallExpressionNode(node, arguments.ToArray());
+                }
+
+                while (MatchTokenTypes(TokenType.OpenBracket) != TokenType.Error)
+                {
+                    // index call
+                    var arguments = new List<ExpressionNode>();
+                    if (MatchTokenTypes(TokenType.CloseBracket) == TokenType.Error)
+                    {
+                        while (true)
+                        {
+                            if (arguments.Count > 0 && MatchTokenTypes(TokenType.Comma) == TokenType.Error)
+                                break;
+
+                            var expr = ParseExpression();
+                            if (expr is null) throw new NotImplementedException();
+                            arguments.Add(expr);
+                        }
+                        ExpectTokenTypes(TokenType.CloseBracket);
+                    }
+                    node = new FunctionCallExpressionNode(new BinaryExpressionNode(node, TokenType.Dot, new IdentifierExpressionNode("Get")), arguments.ToArray());
+                }
+            } while (node != oldNode);
+
+            return node;
         }
         else if (MatchTokenTypes(TokenType.OpenBracket) != TokenType.Error)
         {

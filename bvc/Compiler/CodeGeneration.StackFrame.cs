@@ -17,22 +17,38 @@ partial class CodeGeneration
     internal class StackFrame : IEnumerable<Member>
     {
         public StackFrame? Parent { get; }
-        public StackFrame(StackFrame? parent) => Parent = parent;
+        public StackFrame? GenericParent { get; }
+        public StackFrame(StackFrame? parent, StackFrame? genericParent = null) => (Parent, GenericParent) = (parent, genericParent);
 
         readonly List<StackFrame> relatedStackFrames = new();
-        public object? MemberReference { get; private set; }
+
+        object? memberReference;
+        public object? MemberReference
+        {
+            get
+            {
+                if (memberReference is null && GenericParent is not null)
+                    GenericParent.UpdateRelatedFrames();
+                return memberReference;
+            }
+            private set => memberReference = value;
+        }
         public void SetMemberReference(object? newMemberReference, StackFrame stackFrame)
         {
             MemberReference = newMemberReference;
+            UpdateRelatedFrames();
+        }
+        void UpdateRelatedFrames()
+        {
             foreach (var s in relatedStackFrames)
-                if (s.GenericTypeMembers?.Length > 0)
-                    s.MemberReference = newMemberReference switch
+                if (s.GenericTypeMembers?.Length > 0 && s.memberReference is null)      // important to not call the property
+                    s.MemberReference = MemberReference switch                          // otherwise you'll enter an infinite loop
                     {
                         TypeDefinition typeDefinition => typeDefinition.MakeGenericInstanceType(s.GenericTypeMembers.Select(t => (TypeReference)t.StackFrame.MemberReference!).ToArray()),
                         _ => throw new NotImplementedException()
                     };
                 else
-                    s.MemberReference = newMemberReference;
+                    s.MemberReference = MemberReference;
         }
         public TypeMember[]? GenericTypeMembers { get; set; }
 
@@ -40,7 +56,7 @@ partial class CodeGeneration
 
         public StackFrame NewRelatedFrameWith(TypeMember[]? genericTypeMembers)
         {
-            var newStackFrame = new StackFrame(Parent) { GenericTypeMembers = genericTypeMembers };
+            var newStackFrame = new StackFrame(Parent, this) { GenericTypeMembers = genericTypeMembers };
             newStackFrame.members.AddRange(members);
             relatedStackFrames.Add(newStackFrame);
             return newStackFrame;
