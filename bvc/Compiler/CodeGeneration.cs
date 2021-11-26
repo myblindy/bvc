@@ -3,7 +3,6 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
 using System.Diagnostics.CodeAnalysis;
-using System.Diagnostics.Metrics;
 
 namespace bvc.Compiler;
 
@@ -32,11 +31,14 @@ static partial class CodeGeneration
         _ => throw new NotImplementedException()
     };
 
+    record UnresolvedItem(Node Node, StackFrame NodeStackFrame, StackFrame ParentStackFrame);
+
     public static void Generate(RootNode rootNode, Stream stream, string assemblyName)
     {
         var assembly = AssemblyDefinition.CreateAssembly(new(assemblyName, new()), assemblyName, ModuleKind.Console);
         var module = assembly.MainModule!;
 
+        #region runtime classes
         StackFrame mainStackFrame = new(null);
 
         ClassMember IntegerClassDeclaration;
@@ -199,9 +201,13 @@ static partial class CodeGeneration
                 new FunctionDeclarationNode(TokenType.StaticKeyword, "WriteLine", null, Array.Empty<(TokenType, string, string)>() ),
             }
         });
+        #endregion
+
+        // store unresolved things to later try to resolve them if they're defined out of top-down order
+        var unresolvedItems = new List<UnresolvedItem>();
 
         // first parse out all the types
-        TypeMember ParseExpressionNodeTypeField(ExpressionNode expressionNode, StackFrame stackFrame)
+        TypeMember? ParseExpressionNodeTypeField(ExpressionNode expressionNode, StackFrame stackFrame)
         {
             switch (expressionNode)
             {
@@ -243,11 +249,16 @@ static partial class CodeGeneration
                     };
 
                 case FunctionCallExpressionNode functionCallExpressionNode:
-                    var returnType = stackFrame.FindFunction(functionCallExpressionNode.Expression, out var inferredGenericParameters,
-                        functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray())!.ReturnType!;
+                    var parameters = new TypeMember[functionCallExpressionNode.Arguments.Length];
+                    for (int i = 0; i < functionCallExpressionNode.Arguments.Length; ++i)
+                        if (ParseExpressionNodeTypeField(functionCallExpressionNode.Arguments[i], stackFrame) is { } typeMember)
+                            parameters[i] = typeMember;
+                        else
+                            return null;
+                    var returnType = stackFrame.FindFunction(functionCallExpressionNode.Expression, out var inferredGenericParameters, parameters)?.ReturnType;
                     if (inferredGenericParameters is not null && functionCallExpressionNode.Expression is IdentifierExpressionNode identifierExpressionNode2)
                         identifierExpressionNode2.InferredGenericParameters = inferredGenericParameters.ToArray();
-                    return returnType.AsGeneric(functionCallExpressionNode.Expression, stackFrame);
+                    return returnType?.AsGeneric(functionCallExpressionNode.Expression, stackFrame);
 
                 case StringExpressionNode:
                     return StringClassDeclaration;
@@ -327,7 +338,7 @@ static partial class CodeGeneration
                 }
         }
 
-        void ParseVariableDeclarationNode(VariableDeclarationNode variableDeclarationNode, StackFrame stackFrame)
+        bool ParseVariableDeclarationNode(VariableDeclarationNode variableDeclarationNode, StackFrame stackFrame, StackFrame? varStackFrame = null)
         {
             var varTypeField = stackFrame.Find<TypeMember>(variableDeclarationNode.ReturnType);
             var inferredVarTypeField = variableDeclarationNode.InitialValueExpression is null && variableDeclarationNode.GetFunction is not null
@@ -337,11 +348,24 @@ static partial class CodeGeneration
 
             if (varTypeField is null && inferredVarTypeField is not null)
                 varTypeField = inferredVarTypeField;
-            else if (varTypeField is null && inferredVarTypeField is null || varTypeField != inferredVarTypeField && inferredVarTypeField is not null)
+            else if (varTypeField != inferredVarTypeField && inferredVarTypeField is not null)
                 throw new NotImplementedException();
 
-            stackFrame.Add(new VariableMember(variableDeclarationNode.Modifier, variableDeclarationNode.Name, varTypeField!,
-                variableDeclarationNode.InitialValueExpression, variableDeclarationNode.GetFunction));
+            if (varStackFrame is null)
+            {
+                var variableStackFrame = stackFrame.Add(new VariableMember(variableDeclarationNode.Modifier, variableDeclarationNode.Name, varTypeField,
+                    variableDeclarationNode.InitialValueExpression, variableDeclarationNode.GetFunction));
+
+                if (varTypeField is null && inferredVarTypeField is null) // unresolved symbol
+                    unresolvedItems!.Add(new(variableDeclarationNode, variableStackFrame, stackFrame));
+
+                return varTypeField is not null;
+            }
+            else if (varTypeField is null && inferredVarTypeField is null)
+                throw new NotImplementedException();
+
+            ((VariableMember)varStackFrame.FindParentMember()!).Type = varTypeField;
+            return true;
         }
 
         void ParseMembers(NodeWithMembers nodeWithMembers, StackFrame stackFrame)
@@ -360,6 +384,28 @@ static partial class CodeGeneration
         }
         ParseMembers(rootNode, mainStackFrame);
 
+        // now keep trying to resolve unresolved symbols until we either run out of unresolved symbols or nothing changes (in which case we error out)
+        bool anyUnresolvedItemFixed;
+        do
+        {
+            anyUnresolvedItemFixed = false;
+            for (var unresolvedItemIdx = 0; unresolvedItemIdx < unresolvedItems.Count; ++unresolvedItemIdx)
+            {
+                var unresolvedItem = unresolvedItems[unresolvedItemIdx];
+
+                switch (unresolvedItem.Node)
+                {
+                    case VariableDeclarationNode variableDeclarationNode:
+                        if (ParseVariableDeclarationNode(variableDeclarationNode, unresolvedItem.ParentStackFrame))
+                        {
+                            unresolvedItems.RemoveAt(unresolvedItemIdx--);
+                            anyUnresolvedItemFixed = true;
+                        }
+                        break;
+                }
+            }
+        } while (unresolvedItems.Count > 0 && anyUnresolvedItemFixed);
+
         // next generate the code
         void WriteEnumDeclarationNode(EnumDeclarationNode enumDeclarationNode, StackFrame stackFrame)
         {
@@ -370,7 +416,7 @@ static partial class CodeGeneration
             enumMember.StackFrame.SetMemberReference(enumTypeDefinition, stackFrame);
 
             enumTypeDefinition.Fields.Add(new("value__", FieldAttributes.SpecialName | FieldAttributes.RTSpecialName | FieldAttributes.Public, assembly.MainModule.TypeSystem.Int64));
-            foreach (var (_, Name, _, Expression, _) in enumMember.StackFrame.OfType<VariableMember>())
+            foreach (var (Name, Expression) in enumMember.StackFrame.OfType<VariableMember>().Select(v => (v.Name, v.InitialValueExpression)))
                 enumTypeDefinition.Fields.Add(new(Name, FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.Public | FieldAttributes.HasDefault, enumTypeDefinition)
                 {
                     Constant = ((LiteralExpressionNode)Expression!).Value
@@ -921,7 +967,12 @@ static partial class CodeGeneration
     {
         public StackFrame StackFrame { get; set; } = null!;
     }
-    record VariableMember(TokenType Modifier, string Name, TypeMember? Type, ExpressionNode? InitialValueExpression = null, FunctionDeclarationNode? GetFunction = null) : Member(Name);
+    record VariableMember(TokenType Modifier, string Name, ExpressionNode? InitialValueExpression = null, FunctionDeclarationNode? GetFunction = null) : Member(Name)
+    {
+        public VariableMember(TokenType Modifier, string Name, TypeMember? Type, ExpressionNode? InitialValueExpression = null, FunctionDeclarationNode? GetFunction = null)
+            : this(Modifier, Name, InitialValueExpression, GetFunction) { }
+        public TypeMember? Type { get; set; }
+    }
     internal record ParameterVariableMember(TokenType Modifier, string Name, TypeMember? Type, ExpressionNode? InitialValueExpression = null) : Member(Name);
     internal abstract record TypeMember(string Name) : Member(Name)
     {
