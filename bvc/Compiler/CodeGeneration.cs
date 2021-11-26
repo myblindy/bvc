@@ -3,7 +3,8 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
 using System.Diagnostics.CodeAnalysis;
-using System.Diagnostics.Metrics;
+using System.Xml.Linq;
+using static bvc.Compiler.CodeGeneration;
 
 namespace bvc.Compiler;
 
@@ -32,11 +33,14 @@ static partial class CodeGeneration
         _ => throw new NotImplementedException()
     };
 
+    record UnresolvedItem(Node Node, StackFrame NodeStackFrame, StackFrame ParentStackFrame);
+
     public static void Generate(RootNode rootNode, Stream stream, string assemblyName)
     {
         var assembly = AssemblyDefinition.CreateAssembly(new(assemblyName, new()), assemblyName, ModuleKind.Console);
         var module = assembly.MainModule!;
 
+        #region runtime classes
         StackFrame mainStackFrame = new(null);
 
         ClassMember IntegerClassDeclaration;
@@ -199,9 +203,13 @@ static partial class CodeGeneration
                 new FunctionDeclarationNode(TokenType.StaticKeyword, "WriteLine", null, Array.Empty<(TokenType, string, string)>() ),
             }
         });
+        #endregion
+
+        // store unresolved things to later try to resolve them if they're defined out of top-down order
+        var unresolvedItems = new List<UnresolvedItem>();
 
         // first parse out all the types
-        TypeMember ParseExpressionNodeTypeField(ExpressionNode expressionNode, StackFrame stackFrame)
+        TypeMember? ParseExpressionNodeTypeField(ExpressionNode expressionNode, StackFrame stackFrame)
         {
             switch (expressionNode)
             {
@@ -220,15 +228,17 @@ static partial class CodeGeneration
                 case BinaryExpressionNode binaryExpressionNode:
                     {
                         var leftTypeField = ParseExpressionNodeTypeField(binaryExpressionNode.Left, stackFrame);
+                        if (leftTypeField is null) return null;
                         if (binaryExpressionNode.Operator is TokenType.Dot)
                             return leftTypeField.StackFrame.Find<Member>(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier) switch
                             {
                                 VariableMember variableMember => variableMember.Type!,
-                                _ => throw new NotImplementedException()
+                                _ => null
                             };
                         var rightTypeField = ParseExpressionNodeTypeField(binaryExpressionNode.Right, stackFrame);
+                        if (rightTypeField is null) return null;
                         var fnName = TokenTypeToOperatorName(binaryExpressionNode.Operator);
-                        return leftTypeField.StackFrame.FindFunction(fnName, Array.Empty<TypeMember>(), out _, new[] { rightTypeField })!.ReturnType!;
+                        return leftTypeField.StackFrame.FindFunction(fnName, Array.Empty<TypeMember>(), out _, new[] { rightTypeField })!.ReturnType;
                     }
 
                 case GroupingExpressionNode groupingExpressionNode:
@@ -239,15 +249,30 @@ static partial class CodeGeneration
                     {
                         VariableMember variableMember => variableMember.Type!,
                         ParameterVariableMember parameterVariableMember => parameterVariableMember.Type!,
-                        _ => throw new NotImplementedException(),
+                        _ => null,
                     };
 
                 case FunctionCallExpressionNode functionCallExpressionNode:
-                    var returnType = stackFrame.FindFunction(functionCallExpressionNode.Expression, out var inferredGenericParameters,
-                        functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray())!.ReturnType!;
+                    var parameters = new TypeMember[functionCallExpressionNode.Arguments.Length];
+                    for (int i = 0; i < functionCallExpressionNode.Arguments.Length; ++i)
+                        if (ParseExpressionNodeTypeField(functionCallExpressionNode.Arguments[i], stackFrame) is { } typeMember)
+                            parameters[i] = typeMember;
+                        else
+                            return null;
+
+                    var functionMember = stackFrame.FindFunction(functionCallExpressionNode.Expression, out var inferredGenericParameters, parameters);
+                    if (functionMember is null) return null;
+                    var returnType = functionMember.ReturnType;
+
+                    if(returnType is GenericTypeMember genericTypeMember)
+                    {
+                        var classMember = functionMember.StackFrame.FindParentMember<ClassMember>()!;
+                        returnType = inferredGenericParameters!.ElementAt(classMember.StackFrame.OfType<GenericTypeMember>().TakeWhile(g => g.Name != genericTypeMember.Name).Count());
+                    }
+
                     if (inferredGenericParameters is not null && functionCallExpressionNode.Expression is IdentifierExpressionNode identifierExpressionNode2)
                         identifierExpressionNode2.InferredGenericParameters = inferredGenericParameters.ToArray();
-                    return returnType.AsGeneric(functionCallExpressionNode.Expression, stackFrame);
+                    return returnType?.AsGeneric(functionCallExpressionNode.Expression, stackFrame);
 
                 case StringExpressionNode:
                     return StringClassDeclaration;
@@ -276,20 +301,83 @@ static partial class CodeGeneration
                 foreach (var typeName in classDeclarationNode.GenericTypes)
                     classStackFrame.Add(new GenericTypeMember(typeName));
 
+            var classTypeDefinition = new TypeDefinition(null, classDeclaration.Name,
+                TypeAttributes.UnicodeClass | TypeAttributes.BeforeFieldInit | (stackFrame.Parent is null ? TypeAttributes.Public : TypeAttributes.NestedPublic),
+                assembly.MainModule.TypeSystem.Object);
+
+            if (classDeclarationNode.GenericTypes is not null)
+                foreach (var genericType in classDeclarationNode.GenericTypes)
+                {
+                    GenericParameter genericParameter = new(genericType, classTypeDefinition);
+                    classTypeDefinition.GenericParameters.Add(genericParameter);
+                    classDeclaration.StackFrame.Find<GenericTypeMember>(genericType, false)!.StackFrame.SetMemberReference(genericParameter, stackFrame);
+                }
+
+            classDeclaration.StackFrame.SetMemberReference(classTypeDefinition, stackFrame);
+
+            // inject a primary constructor if none are found
+            if (!classDeclarationNode.Members.OfType<FunctionDeclarationNode>().Any(m => m.Name == FunctionDeclarationNode.PrimaryConstructorName))
+                classDeclarationNode.Members.Add(new FunctionDeclarationNode(TokenType.None, FunctionDeclarationNode.PrimaryConstructorName, null, Array.Empty<(TokenType, string, string)>()));
+
             ParseMembers(classDeclarationNode, classStackFrame);
+
+            if (stackFrame.Parent is not null)
+                ((TypeDefinition)stackFrame.MemberReference).NestedTypes.Add(classTypeDefinition);
+            else
+                module!.Types.Add(classTypeDefinition);
         }
 
         void ParseFunctionDeclarationNode(FunctionDeclarationNode functionDeclarationNode, StackFrame stackFrame)
         {
-            var functionDeclaration = new FunctionMember(functionDeclarationNode.Modifier, functionDeclarationNode.Name, functionDeclarationNode.IsPrimaryConstructor
+            var functionMember = new FunctionMember(functionDeclarationNode.Modifier, functionDeclarationNode.Name, functionDeclarationNode.IsPrimaryConstructor
                 ? (ClassMember)stackFrame.FindParentMember()!
                 : stackFrame.Find<TypeMember>(functionDeclarationNode.ReturnType));
-            var functionStackFrame = stackFrame.Add(functionDeclaration);
+            var functionStackFrame = stackFrame.Add(functionMember);
             foreach (var arg in functionDeclarationNode.Arguments)
             {
                 var type = stackFrame.Find<TypeMember>(arg.Type)!;
                 functionStackFrame.Add(new ParameterVariableMember(arg.Modifier, arg.Name, type));
                 stackFrame.Add(new VariableMember(arg.Modifier, arg.Name, type, null));
+            }
+
+            if (!functionDeclarationNode.Internal)
+            {
+                var functionDefinition = new MethodDefinition(functionMember.Name,
+                    MethodAttributes.Public | (functionDeclarationNode.Modifier is TokenType.StaticKeyword ? MethodAttributes.Static : 0) | (functionDeclarationNode.IsPrimaryConstructor
+                        ? MethodAttributes.HideBySig | MethodAttributes.RTSpecialName | MethodAttributes.SpecialName
+                        : 0), (functionDeclarationNode.IsPrimaryConstructor ? null : (TypeReference?)functionMember.ReturnType?.StackFrame.MemberReference) ?? module!.TypeSystem.Void);
+                functionDefinition.Body.InitLocals = true;
+                functionMember.StackFrame.SetMemberReference(functionDefinition, stackFrame);
+
+                // arguments
+                foreach (var parameter in functionMember.StackFrame.OfType<ParameterVariableMember>())
+                {
+                    var parameterTypeReference = (TypeReference?)parameter.Type!.StackFrame.MemberReference!;
+                    if (parameter.Modifier == TokenType.VarArgKeyword)
+                        parameterTypeReference = parameterTypeReference.MakeArrayType();
+                    var parameterDefinition = new ParameterDefinition(parameter.Name, ParameterAttributes.None, parameterTypeReference);
+                    functionDefinition.Parameters.Add(parameterDefinition);
+                    functionMember.StackFrame.Find<ParameterVariableMember>(parameter.Name!)!.StackFrame.SetMemberReference(parameterDefinition, stackFrame);
+                }
+
+                if (functionDeclarationNode.IsPrimaryConstructor)
+                {
+                    var parentTypeDefinition = (TypeDefinition)stackFrame.MemberReference!;
+
+                    // create the backing properties for the primary constructor
+                    foreach (var parameter in functionMember.StackFrame.OfType<ParameterVariableMember>().Where(p => p.Modifier != TokenType.VarArgKeyword))
+                    {
+                        var (propertyDefinition, fieldDefinition) = BuildPropertyDefinition(parentTypeDefinition, parameter.Modifier, parameter.Name!,
+                            (TypeReference)parameter.Type!.StackFrame.MemberReference!, module!, forceBackingFieldGet: true);
+
+                        stackFrame.Find<VariableMember>(parameter.Name!, false)!.StackFrame.SetMemberReference(propertyDefinition, stackFrame);
+                    }
+                }
+
+                if (stackFrame.Parent is not null)
+                    ((TypeDefinition)stackFrame.MemberReference).Methods.Add(functionDefinition);
+                else
+                    throw new NotImplementedException();
             }
 
             ParseBlockNode(functionDeclarationNode.Members, functionStackFrame);
@@ -327,7 +415,7 @@ static partial class CodeGeneration
                 }
         }
 
-        void ParseVariableDeclarationNode(VariableDeclarationNode variableDeclarationNode, StackFrame stackFrame)
+        bool ParseVariableDeclarationNode(VariableDeclarationNode variableDeclarationNode, StackFrame stackFrame, StackFrame? varStackFrame = null)
         {
             var varTypeField = stackFrame.Find<TypeMember>(variableDeclarationNode.ReturnType);
             var inferredVarTypeField = variableDeclarationNode.InitialValueExpression is null && variableDeclarationNode.GetFunction is not null
@@ -337,11 +425,54 @@ static partial class CodeGeneration
 
             if (varTypeField is null && inferredVarTypeField is not null)
                 varTypeField = inferredVarTypeField;
-            else if (varTypeField is null && inferredVarTypeField is null || varTypeField != inferredVarTypeField && inferredVarTypeField is not null)
+            else if (varTypeField != inferredVarTypeField && inferredVarTypeField is not null)
                 throw new NotImplementedException();
 
-            stackFrame.Add(new VariableMember(variableDeclarationNode.Modifier, variableDeclarationNode.Name, varTypeField!,
-                variableDeclarationNode.InitialValueExpression, variableDeclarationNode.GetFunction));
+            void setupFieldDefinition(VariableMember variableField)
+            {
+                if (varTypeField is not null && stackFrame.MemberReference is TypeDefinition parentTypeDefinition)
+                {
+                    if (variableField.GetFunction is not null || variableDeclarationNode.Modifier == TokenType.ValPureKeyword)
+                    {
+                        // this is actually a read-only property with no backing field
+                        var (propertyDefinition, _) = BuildPropertyDefinition(parentTypeDefinition, variableField.Modifier, variableField.Name!,
+                            (TypeReference)variableField.Type!.StackFrame.MemberReference!, module!,
+                            writeGetBody: variableField.GetFunction is null ? null
+                                : (ilProcessor, functionDefinition, fieldDefinition) => WriteFunctionBody(variableField.StackFrame.AccessorFrames.Get, functionDefinition, ilProcessor));
+                        variableField.StackFrame.SetMemberReference(propertyDefinition, stackFrame);
+                    }
+                    else
+                    {
+                        var variableDefinition = new FieldDefinition(variableDeclarationNode.Name, FieldAttributes.Public, (TypeReference)variableField.Type!.StackFrame.MemberReference!);
+                        variableField.StackFrame.SetMemberReference(variableDefinition, stackFrame);
+
+                        parentTypeDefinition.Fields.Add(variableDefinition);
+                    }
+                }
+
+            }
+
+            if (varStackFrame is null)
+            {
+                var variableMember = new VariableMember(variableDeclarationNode.Modifier, variableDeclarationNode.Name, varTypeField,
+                    variableDeclarationNode.InitialValueExpression, variableDeclarationNode.GetFunction);
+                var variableStackFrame = stackFrame.Add(variableMember);
+
+                if (varTypeField is null && inferredVarTypeField is null) // unresolved symbol
+                    unresolvedItems!.Add(new(variableDeclarationNode, variableStackFrame, stackFrame));
+
+                setupFieldDefinition(variableMember);
+                return varTypeField is not null;
+            }
+            else if (varTypeField is null && inferredVarTypeField is null)
+                return false;
+            else
+            {
+                var variableMember = (VariableMember)varStackFrame.FindParentMember()!;
+                variableMember.Type = varTypeField;
+                setupFieldDefinition(variableMember);
+                return true;
+            }
         }
 
         void ParseMembers(NodeWithMembers nodeWithMembers, StackFrame stackFrame)
@@ -360,6 +491,28 @@ static partial class CodeGeneration
         }
         ParseMembers(rootNode, mainStackFrame);
 
+        // now keep trying to resolve unresolved symbols until we either run out of unresolved symbols or nothing changes (in which case we error out)
+        bool anyUnresolvedItemFixed;
+        do
+        {
+            anyUnresolvedItemFixed = false;
+            for (var unresolvedItemIdx = 0; unresolvedItemIdx < unresolvedItems.Count; ++unresolvedItemIdx)
+            {
+                var unresolvedItem = unresolvedItems[unresolvedItemIdx];
+
+                switch (unresolvedItem.Node)
+                {
+                    case VariableDeclarationNode variableDeclarationNode:
+                        if (ParseVariableDeclarationNode(variableDeclarationNode, unresolvedItem.ParentStackFrame, unresolvedItem.NodeStackFrame))
+                        {
+                            unresolvedItems.RemoveAt(unresolvedItemIdx--);
+                            anyUnresolvedItemFixed = true;
+                        }
+                        break;
+                }
+            }
+        } while (unresolvedItems.Count > 0 && anyUnresolvedItemFixed);
+
         // next generate the code
         void WriteEnumDeclarationNode(EnumDeclarationNode enumDeclarationNode, StackFrame stackFrame)
         {
@@ -370,7 +523,7 @@ static partial class CodeGeneration
             enumMember.StackFrame.SetMemberReference(enumTypeDefinition, stackFrame);
 
             enumTypeDefinition.Fields.Add(new("value__", FieldAttributes.SpecialName | FieldAttributes.RTSpecialName | FieldAttributes.Public, assembly.MainModule.TypeSystem.Int64));
-            foreach (var (_, Name, _, Expression, _) in enumMember.StackFrame.OfType<VariableMember>())
+            foreach (var (Name, Expression) in enumMember.StackFrame.OfType<VariableMember>().Select(v => (v.Name, v.InitialValueExpression)))
                 enumTypeDefinition.Fields.Add(new(Name, FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.Public | FieldAttributes.HasDefault, enumTypeDefinition)
                 {
                     Constant = ((LiteralExpressionNode)Expression!).Value
@@ -385,19 +538,8 @@ static partial class CodeGeneration
         void WriteClassDeclarationNode(ClassDeclarationNode classDeclarationNode, StackFrame stackFrame)
         {
             var classDeclaration = stackFrame.Find<ClassMember>(classDeclarationNode.Name)!;
-            var classTypeDefinition = new TypeDefinition(null, classDeclaration.Name,
-                TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit | (stackFrame.Parent is null ? TypeAttributes.Public : TypeAttributes.NestedPublic),
-                assembly.MainModule.TypeSystem.Object);
+            var classTypeDefinition = (TypeDefinition)classDeclaration.StackFrame.MemberReference!;
 
-            if (classDeclarationNode.GenericTypes is not null)
-                foreach (var genericType in classDeclarationNode.GenericTypes)
-                {
-                    GenericParameter genericParameter = new(genericType, classTypeDefinition);
-                    classTypeDefinition.GenericParameters.Add(genericParameter);
-                    classDeclaration.StackFrame.Find<GenericTypeMember>(genericType, false)!.StackFrame.SetMemberReference(genericParameter, stackFrame);
-                }
-
-            classDeclaration.StackFrame.SetMemberReference(classTypeDefinition, stackFrame);
             WriteDeclarations(classDeclarationNode, classDeclaration.StackFrame);
 
             classDeclarationNode.CustomCode?.Invoke(classTypeDefinition);
@@ -405,11 +547,6 @@ static partial class CodeGeneration
             // finalize all constructors, they were left unfinished to write field initialization
             foreach (var constructorDefinition in classTypeDefinition.Methods.Where(m => m.IsConstructor))
                 constructorDefinition.Body.GetILProcessor().Emit(OpCodes.Ret);
-
-            if (stackFrame.Parent is not null)
-                ((TypeDefinition)stackFrame.MemberReference).NestedTypes.Add(classTypeDefinition);
-            else
-                module!.Types.Add(classTypeDefinition);
         }
 
         void WriteFunctionBody(StackFrame functionStackFrame, MethodDefinition functionDefinition, ILProcessor functionIl)
@@ -443,7 +580,7 @@ static partial class CodeGeneration
                     case ForStatement forStatement:
                         {
                             // get the components required for enumeration
-                            var enumerableType = ParseExpressionNodeTypeField(forStatement.EnumerableNode, forStatement.StackFrame);
+                            var enumerableType = ParseExpressionNodeTypeField(forStatement.EnumerableNode, forStatement.StackFrame)!;
                             var enumerableGenericParameters = enumerableType.StackFrame.GenericTypeMembers?.Select(w => (TypeReference)w.StackFrame.MemberReference!).ToArray();
 
                             // store the count in a variable
@@ -520,29 +657,12 @@ static partial class CodeGeneration
 
             var functionMember = stackFrame.FindFunction(functionDeclarationNode.Name, stackFrame.GenericTypeMembers, out _,
                 functionDeclarationNode.Arguments.Select(a => stackFrame.Find<TypeMember>(a.Type)!).ToArray())!;
-            var functionDefinition = new MethodDefinition(functionMember.Name,
-                MethodAttributes.Public | (functionDeclarationNode.Modifier is TokenType.StaticKeyword ? MethodAttributes.Static : 0) | (functionDeclarationNode.IsPrimaryConstructor
-                    ? MethodAttributes.HideBySig | MethodAttributes.RTSpecialName | MethodAttributes.SpecialName
-                    : 0), (functionDeclarationNode.IsPrimaryConstructor ? null : (TypeReference?)functionMember.ReturnType?.StackFrame.MemberReference) ?? module!.TypeSystem.Void);
-            functionMember.StackFrame.SetMemberReference(functionDefinition, stackFrame);
+            var functionDefinition = (MethodDefinition)functionMember.StackFrame.MemberReference!;
 
             // entry point?
             if (functionDeclarationNode is { Modifier: TokenType.StaticKeyword, Name: "Main" })
-                assembly.EntryPoint = functionDefinition;
+                assembly!.EntryPoint = functionDefinition;
 
-            // arguments
-            int parameterIdx = 0;
-            foreach (var parameter in functionMember.StackFrame.OfType<ParameterVariableMember>())
-            {
-                var parameterTypeReference = (TypeReference?)parameter.Type!.StackFrame.MemberReference!;
-                if (parameter.Modifier == TokenType.VarArgKeyword)
-                    parameterTypeReference = parameterTypeReference.MakeArrayType();
-                var parameterDefinition = new ParameterDefinition(parameter.Name, ParameterAttributes.None, parameterTypeReference);
-                functionDefinition.Parameters.Add(parameterDefinition);
-                functionMember.StackFrame.Find<ParameterVariableMember>(parameter.Name!)!.StackFrame.SetMemberReference(parameterDefinition, stackFrame);
-            }
-
-            functionDefinition.Body.InitLocals = true;
             var functionIl = functionDefinition.Body.GetILProcessor();
 
             if (functionDeclarationNode.IsPrimaryConstructor)
@@ -554,11 +674,10 @@ static partial class CodeGeneration
                 functionIl.Emit(OpCodes.Call, module!.ImportReference(TypeHelpers.DefaultCtorFor(parentTypeDefinition!.BaseType)));
 
                 // create the backing properties for the primary constructor
-                parameterIdx = 0;
+                var parameterIdx = 0;
                 foreach (var parameter in functionMember.StackFrame.OfType<ParameterVariableMember>().Where(p => p.Modifier != TokenType.VarArgKeyword))
                 {
-                    var (propertyDefinition, fieldDefinition) = BuildPropertyDefinition(parentTypeDefinition!, parameter.Modifier, parameter.Name!,
-                        (TypeReference)parameter.Type!.StackFrame.MemberReference!, module, forceBackingFieldGet: true);
+                    var propertyDefinition = (PropertyDefinition)stackFrame.Find<VariableMember>(parameter.Name!)!.StackFrame.MemberReference!;
 
                     // assign the property with the corresponding constructor parameter value
                     functionIl.Emit(OpCodes.Ldarg_0);
@@ -566,18 +685,17 @@ static partial class CodeGeneration
                     if (propertyDefinition.SetMethod is not null)
                         functionIl.Emit(OpCodes.Call, propertyDefinition.SetMethod);
                     else
-                        functionIl.Emit(OpCodes.Stfld, fieldDefinition);
+                    {
+                        var backingFieldName = GetBackingFieldName(parameter.Name!);
+                        functionIl.Emit(OpCodes.Stfld, ((TypeDefinition)functionMember.StackFrame.FindParentMember<ClassMember>()!.StackFrame.MemberReference!)
+                            .Fields.First(f => f.Name == backingFieldName));
+                    }
 
                     stackFrame.Find<VariableMember>(parameter.Name!, false)!.StackFrame.SetMemberReference(propertyDefinition, stackFrame);
                 }
             }
             else
                 WriteFunctionBody(functionMember.StackFrame, functionDefinition, functionIl);
-
-            if (stackFrame.Parent is not null)
-                ((TypeDefinition)stackFrame.MemberReference).Methods.Add(functionDefinition);
-            else
-                throw new NotImplementedException();
         }
 
         void WriteVariableDeclarationNode(VariableDeclarationNode variableDeclarationNode, StackFrame stackFrame)
@@ -585,20 +703,9 @@ static partial class CodeGeneration
             var variableField = stackFrame.Find<VariableMember>(variableDeclarationNode.Name)!;
             var parentTypeDefinition = (TypeDefinition)stackFrame.MemberReference!;
 
-            if (variableField.GetFunction is not null || variableDeclarationNode.Modifier == TokenType.ValPureKeyword)
+            if (variableField.GetFunction is null && variableDeclarationNode.Modifier != TokenType.ValPureKeyword)
             {
-                // this is actually a read-only property with no backing field
-                var (propertyDefinition, _) = BuildPropertyDefinition(parentTypeDefinition, variableField.Modifier, variableField.Name!, (TypeReference)variableField.Type!.StackFrame.MemberReference!, module!,
-                    writeGetBody: variableField.GetFunction is null ? null
-                        : (ilProcessor, functionDefinition, fieldDefinition) => WriteFunctionBody(variableField.StackFrame.AccessorFrames.Get, functionDefinition, ilProcessor));
-                variableField.StackFrame.SetMemberReference(propertyDefinition, stackFrame);
-            }
-            else
-            {
-                var variableDefinition = new FieldDefinition(variableDeclarationNode.Name, FieldAttributes.Public, (TypeReference)variableField.Type!.StackFrame.MemberReference!);
-                variableField.StackFrame.SetMemberReference(variableDefinition, stackFrame);
-
-                parentTypeDefinition.Fields.Add(variableDefinition);
+                var variableDefinition = (FieldDefinition)variableField.StackFrame.MemberReference!;
 
                 if (variableDeclarationNode.InitialValueExpression is not null)
                     foreach (var constructorDefinition in parentTypeDefinition.Methods.Where(m => m.IsConstructor))
@@ -729,6 +836,11 @@ static partial class CodeGeneration
                                 ilProcessor.Emit(OpCodes.Ldarg_0);
                                 ilProcessor.Emit(OpCodes.Callvirt, propertyDefinition.GetMethod);
                             }
+                            else if (variableMember.StackFrame.MemberReference is FieldDefinition fieldDefinition)
+                            {
+                                ilProcessor.Emit(OpCodes.Ldarg_0);
+                                ilProcessor.Emit(OpCodes.Ldfld, fieldDefinition);
+                            }
                             else
                                 throw new NotImplementedException();
                             return variableMember.Type;
@@ -742,7 +854,8 @@ static partial class CodeGeneration
                             throw new NotImplementedException();
                     }
                 case FunctionCallExpressionNode functionCallExpressionNode:
-                    var functionMember = stackFrame.FindFunction(functionCallExpressionNode.Expression, out var inferredGenericParameters, functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray());
+                    var functionMember = stackFrame.FindFunction(functionCallExpressionNode.Expression, out var inferredGenericParameters,
+                        functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray());
                     if (functionMember is null) throw new NotImplementedException();
 
                     if (functionCallExpressionNode.Expression is not BinaryExpressionNode binaryExpressionNode2)
@@ -828,6 +941,10 @@ static partial class CodeGeneration
                     }
 
                     ilProcessor.Emit(functionMember.IsConstructor ? OpCodes.Newobj : methodReference.Resolve().IsVirtual ? OpCodes.Callvirt : OpCodes.Call, methodReference);
+
+                    // specialize the return if necessary
+                    if (functionMember.ReturnType is GenericTypeMember genericTypeMember1)
+                        return inferredGenericParameters!.ElementAt(classMember.StackFrame.OfType<GenericTypeMember>().TakeWhile(g => g.Name != genericTypeMember1.Name).Count());
                     return functionMember.ReturnType;
 
                 default: throw new NotImplementedException();
@@ -855,6 +972,8 @@ static partial class CodeGeneration
         assembly.Write(stream);
     }
 
+    static string GetBackingFieldName(string propName) => $"<P>{propName}__BackingField";
+
     static (PropertyDefinition, FieldDefinition?) BuildPropertyDefinition(TypeDefinition typeDefinition, TokenType modifier, string name, TypeReference type, ModuleDefinition module,
         bool forceBackingFieldGet = false, Action<ILProcessor, MethodDefinition, FieldDefinition?>? writeGetBody = null, Action<ILProcessor, MethodDefinition, FieldDefinition?>? writeSetBody = null)
     {
@@ -864,7 +983,7 @@ static partial class CodeGeneration
         FieldDefinition? fieldDefinition = default;
         if (forceBackingFieldGet || modifier is not TokenType.ValKeyword and not TokenType.ValPureKeyword)
         {
-            fieldDefinition = new FieldDefinition($"<P>{name}__BackingField", FieldAttributes.Private, type);
+            fieldDefinition = new FieldDefinition(GetBackingFieldName(name), FieldAttributes.Private, type);
             typeDefinition.Fields.Add(fieldDefinition);
         }
 
@@ -921,7 +1040,12 @@ static partial class CodeGeneration
     {
         public StackFrame StackFrame { get; set; } = null!;
     }
-    record VariableMember(TokenType Modifier, string Name, TypeMember? Type, ExpressionNode? InitialValueExpression = null, FunctionDeclarationNode? GetFunction = null) : Member(Name);
+    record VariableMember(TokenType Modifier, string Name, ExpressionNode? InitialValueExpression = null, FunctionDeclarationNode? GetFunction = null) : Member(Name)
+    {
+        public VariableMember(TokenType Modifier, string Name, TypeMember? type, ExpressionNode? InitialValueExpression = null, FunctionDeclarationNode? GetFunction = null)
+            : this(Modifier, Name, InitialValueExpression, GetFunction) => Type = type;
+        public TypeMember? Type { get; set; }
+    }
     internal record ParameterVariableMember(TokenType Modifier, string Name, TypeMember? Type, ExpressionNode? InitialValueExpression = null) : Member(Name);
     internal abstract record TypeMember(string Name) : Member(Name)
     {
