@@ -23,6 +23,13 @@ record VariableDeclarationNode(TokenType Modifier, string Name, IdentifierExpres
 abstract record ExpressionNode : Node;
 record BinaryExpressionNode(ExpressionNode Left, TokenType Operator, ExpressionNode Right) : ExpressionNode
 {
+    public IEnumerable<ExpressionNode> EnumerateLeftExpressions()
+    {
+        BinaryExpressionNode e = this;
+        while (e.Left is BinaryExpressionNode leftBinaryExpressionNode)
+            yield return e = leftBinaryExpressionNode;
+    }
+
     public ExpressionNode LeftMostExpression
     {
         get

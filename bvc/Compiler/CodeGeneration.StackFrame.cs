@@ -198,14 +198,15 @@ partial class CodeGeneration
             }
         }
 
-        public FunctionMember? FindFunction(ExpressionNode expression, out IEnumerable<TypeMember>? inferredGenericParameters, TypeMember[] parameters)
+        public FunctionMember? FindFunction(ExpressionNode expression, out IEnumerable<TypeMember>? inferredGenericParameters, TypeMember[] parameters, Func<ExpressionNode, TypeMember?> getExpressionType)
         {
-            var genericParameters = (expression switch
+            var genericParameters = ((expression switch
             {
-                IdentifierExpressionNode identifierExpression => identifierExpression.GenericParameters ?? Array.Empty<ExpressionNode>(),
-                BinaryExpressionNode binaryExpressionNode => ((IdentifierExpressionNode)binaryExpressionNode.Right).GenericParameters ?? Array.Empty<ExpressionNode>(),
+                IdentifierExpressionNode identifierExpression => identifierExpression.GenericParameters,
+                BinaryExpressionNode binaryExpressionNode => ((IdentifierExpressionNode)binaryExpressionNode.Right).GenericParameters,
+                FunctionCallExpressionNode functionCallExpressionNode => ((IdentifierExpressionNode)functionCallExpressionNode.Expression).GenericParameters,
                 _ => throw new NotImplementedException()
-            }).Select(w => Find<TypeMember>(w)!).ToArray();
+            }) ?? Array.Empty<ExpressionNode>()).Select(w => Find<TypeMember>(w)!).ToArray();
 
             Member? internalFindFunction(ExpressionNode expression, out IEnumerable<TypeMember>? newInferredGenericParameters, TypeMember[] parameters, StackFrame stackFrame, bool recurse, int level = 0)
             {
@@ -225,18 +226,31 @@ partial class CodeGeneration
                     {
                         VariableMember variableMember => variableMember.Type!,
                         ClassMember classMember => classMember,
+                        FunctionMember functionMember => functionMember.ReturnType,
                         _ => throw new NotImplementedException()
                     };
+                    if (leftType is null) return null;
 
                     var rightMember = level == 0
                         ? leftType.StackFrame.FindFunction(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier,
-                            (leftType.StackFrame.GenericTypeMembers ?? Array.Empty<TypeMember>()).Concat(genericParameters).ToArray(),
+                            (leftType.StackFrame.GenericTypeMembers ?? Array.Empty<TypeMember>()).Concat(genericParameters).Concat(newInferredGenericParameters ?? Array.Empty<TypeMember>()).ToArray(),
                             out newInferredGenericParameters, parameters, false)
                         : leftType.StackFrame.Find<Member>(((IdentifierExpressionNode)binaryExpressionNode.Right).Identifier, false);
                     return rightMember;
                 }
                 else if (expression is FunctionCallExpressionNode functionCallExpressionNode)
-                    return stackFrame.FindFunction(functionCallExpressionNode, out newInferredGenericParameters, functionCallExpressionNode.Arguments);
+                {
+                    var parameterTypes = new TypeMember[functionCallExpressionNode.Arguments.Length];
+                    for (int i = 0; i < functionCallExpressionNode.Arguments.Length; ++i)
+                        if (getExpressionType(functionCallExpressionNode.Arguments[i]) is { } typeMember)
+                            parameterTypes[i] = typeMember;
+                        else
+                        {
+                            newInferredGenericParameters = null;
+                            return null;
+                        }
+                    return stackFrame.FindFunction(functionCallExpressionNode.Expression, out newInferredGenericParameters, parameterTypes, getExpressionType);
+                }
                 newInferredGenericParameters = null;
                 return null;
             }

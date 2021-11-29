@@ -260,11 +260,12 @@ static partial class CodeGeneration
                         else
                             return null;
 
-                    var functionMember = stackFrame.FindFunction(functionCallExpressionNode.Expression, out var inferredGenericParameters, parameters);
+                    var functionMember = stackFrame.FindFunction(functionCallExpressionNode.Expression, out var inferredGenericParameters, parameters,
+                        e => ParseExpressionNodeTypeField(e, stackFrame));
                     if (functionMember is null) return null;
                     var returnType = functionMember.ReturnType;
 
-                    if(returnType is GenericTypeMember genericTypeMember)
+                    if (returnType is GenericTypeMember genericTypeMember)
                     {
                         var classMember = functionMember.StackFrame.FindParentMember<ClassMember>()!;
                         returnType = inferredGenericParameters!.ElementAt(classMember.StackFrame.OfType<GenericTypeMember>().TakeWhile(g => g.Name != genericTypeMember.Name).Count());
@@ -748,14 +749,16 @@ static partial class CodeGeneration
                 case GroupingExpressionNode groupingExpressionNode:
                     return WriteExpressionNode(groupingExpressionNode.Expression, ilProcessor, stackFrame);
                 case UnaryExpressionNode unaryExpressionNode:
-                    var type = WriteExpressionNode(unaryExpressionNode.Right, ilProcessor, stackFrame);
-                    ilProcessor.Emit(unaryExpressionNode.Operator switch
                     {
-                        TokenType.Not => OpCodes.Not,
-                        TokenType.Minus => OpCodes.Neg,
-                        _ => throw new NotImplementedException()
-                    });
-                    return type;
+                        var type = WriteExpressionNode(unaryExpressionNode.Right, ilProcessor, stackFrame);
+                        ilProcessor.Emit(unaryExpressionNode.Operator switch
+                        {
+                            TokenType.Not => OpCodes.Not,
+                            TokenType.Minus => OpCodes.Neg,
+                            _ => throw new NotImplementedException()
+                        });
+                        return type;
+                    }
                 case BinaryExpressionNode binaryExpressionNode:
                     {
                         var leftTypeField = WriteExpressionNode(binaryExpressionNode.Left, ilProcessor, stackFrame);
@@ -850,102 +853,123 @@ static partial class CodeGeneration
                             ilProcessor.Emit(OpCodes.Ldarg, (ParameterDefinition)parameterVariableMember.StackFrame.MemberReference!);
                             return parameterVariableMember.Type;
                         }
+                        else if (member is FunctionMember functionMember1)
+                            return functionMember1.ReturnType;
+                        else if (member is ClassMember classMember1)
+                            return classMember1;
                         else
                             throw new NotImplementedException();
                     }
                 case FunctionCallExpressionNode functionCallExpressionNode:
-                    var functionMember = stackFrame.FindFunction(functionCallExpressionNode.Expression, out var inferredGenericParameters,
-                        functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray());
-                    if (functionMember is null) throw new NotImplementedException();
+                    {
+                        var functionMember = stackFrame.FindFunction(functionCallExpressionNode.Expression, out var inferredGenericParameters,
+                            functionCallExpressionNode.Arguments.Select(a => ParseExpressionNodeTypeField(a, stackFrame)).ToArray(),
+                            e => ParseExpressionNodeTypeField(e, stackFrame));
+                        if (functionMember is null) throw new NotImplementedException();
 
-                    if (functionCallExpressionNode.Expression is not BinaryExpressionNode binaryExpressionNode2)
-                    {
-                        if (!functionMember.IsConstructor)
-                            ilProcessor.Emit(OpCodes.Ldarg_0); // this.
-                    }
-                    else
-                    {
-                        // if the left most expression is a type, this is a static lookup
-                        var id = (IdentifierExpressionNode)binaryExpressionNode2.LeftMostExpression;
-                        if (stackFrame.Find<Member>(id) is not TypeMember)
+                        var methodReference = (MethodReference)functionMember.StackFrame.MemberReference!;
+                        var classMember = (ClassMember)functionMember.StackFrame.Parent!.FindParentMember()!;
+
+                        var currentInstructionIndex = ilProcessor.Body.Instructions.Count;
+                        var type = WriteExpressionNode(functionCallExpressionNode.Expression, ilProcessor, functionMember.StackFrame);
+                        var alreadyWritten = ilProcessor.Body.Instructions.Count != currentInstructionIndex;
+
+                        // if already written by the dot handler, save the written call, write our parameters then put it back
+                        var savedCall = alreadyWritten ? ilProcessor.Body.Instructions.Last() : null;
+                        if (alreadyWritten) ilProcessor.Body.Instructions.RemoveAt(ilProcessor.Body.Instructions.Count - 1);
+
+                        var parameters = functionMember.StackFrame.Parameters.ToArray();
+                        for (int argIdx = 0, pIdx = 0; pIdx < parameters.Length; ++argIdx, ++pIdx)
                         {
-                            VariableMember emitLoads(BinaryExpressionNode be)
+                            var parameter = parameters[pIdx];
+                            if (parameter.Modifier == TokenType.VarArgKeyword)
                             {
-                                // a lot of cases missing, that's fine, just implement as needed
-                                if (be.Left is BinaryExpressionNode binaryExpressionNode3)
-                                    return emitLoads(binaryExpressionNode3);
-                                else
+                                // if a generic parameter, get the real type instead
+                                var destType = parameter.Type! switch
                                 {
-                                    var member = stackFrame.Find<VariableMember>(((IdentifierExpressionNode)be.Left).Identifier);
-                                    if (member is null) throw new NotImplementedException();
-                                    ilProcessor.Emit(OpCodes.Ldloc, (VariableDefinition)member.StackFrame.MemberReference!);
-                                    return member;
+                                    GenericTypeMember genericTypeMember => (((IdentifierExpressionNode)functionCallExpressionNode.Expression).InferredGenericParameters ?? inferredGenericParameters?.ToArray()) is { } foundInferredGenericParameters
+                                        ? foundInferredGenericParameters[classMember.StackFrame.OfType<GenericTypeMember>().TakeWhile(w => w.Name != genericTypeMember.Name).Count()]
+                                        : stackFrame.Find<TypeMember>(((IdentifierExpressionNode)functionCallExpressionNode.Expression)
+                                            .GenericParameters![classMember.StackFrame.OfType<GenericTypeMember>().TakeWhile(w => w.Name != genericTypeMember.Name).Count()])!,
+                                    EnumMember or ClassMember => parameter.Type!,
+                                    _ => throw new NotImplementedException()
+                                };
+
+                                int argCnt = 0;
+                                for (; argCnt + argIdx < functionCallExpressionNode.Arguments.Length && ParseExpressionNodeTypeField(functionCallExpressionNode.Arguments[argIdx], stackFrame)!.IsAssignableTo(destType); ++argCnt) { }
+                                ilProcessor.Emit(OpCodes.Ldc_I4, argCnt);
+                                ilProcessor.Emit(OpCodes.Newarr, (TypeReference)destType.StackFrame.MemberReference!);
+
+                                for (var argIdx2 = argIdx; argIdx2 < argCnt; ++argIdx2)
+                                {
+                                    ilProcessor.Emit(OpCodes.Dup);
+                                    ilProcessor.Emit(OpCodes.Ldc_I4, argIdx2);
+                                    var typeMember = WriteExpressionNode(functionCallExpressionNode.Arguments[argIdx++], ilProcessor, stackFrame);
+                                    ilProcessor.Emit(typeMember == IntegerClassDeclaration ? OpCodes.Stelem_I8 : OpCodes.Stelem_Ref);
+                                }
+
+                                --argIdx;
+                            }
+                            else if (WriteExpressionNode(functionCallExpressionNode.Arguments[argIdx], ilProcessor, stackFrame) == IntegerClassDeclaration && parameter.Type == DoubleClassDeclaration)
+                                ilProcessor.Emit(OpCodes.Conv_R8);
+                        }
+
+                        if (alreadyWritten) ilProcessor.Append(savedCall);
+
+                        if (!alreadyWritten)
+                        {
+                            if (functionCallExpressionNode.Expression is not BinaryExpressionNode binaryExpressionNode2)
+                            {
+                                if (!functionMember.IsConstructor)
+                                    ilProcessor.Emit(OpCodes.Ldarg_0); // this.
+                            }
+                            else
+                            {
+                                // if the left most expression is a type, this is a static lookup
+                                var id = (IdentifierExpressionNode)binaryExpressionNode2.LeftMostExpression;
+                                if (stackFrame.Find<Member>(id) is not TypeMember)
+                                {
+                                    VariableMember emitLoads(BinaryExpressionNode be)
+                                    {
+                                        // a lot of cases missing, that's fine, just implement as needed
+                                        if (be.Left is BinaryExpressionNode binaryExpressionNode3)
+                                            return emitLoads(binaryExpressionNode3);
+                                        else
+                                        {
+                                            var member = stackFrame.Find<VariableMember>(((IdentifierExpressionNode)be.Left).Identifier);
+                                            if (member is null) throw new NotImplementedException();
+                                            ilProcessor.Emit(OpCodes.Ldloc, (VariableDefinition)member.StackFrame.MemberReference!);
+                                            return member;
+                                        }
+                                    }
+                                    emitLoads(binaryExpressionNode2);
                                 }
                             }
-                            emitLoads(binaryExpressionNode2);
-                        }
-                    }
 
-                    var methodReference = (MethodReference)functionMember.StackFrame.MemberReference!;
-                    var classMember = (ClassMember)functionMember.StackFrame.Parent!.FindParentMember()!;
-                    if (classMember.StackFrame.OfType<GenericTypeMember>().Any())
-                    {
-                        var newMethodReference = new MethodReference(methodReference.Name, methodReference.ReturnType)
-                        {
-                            HasThis = methodReference.HasThis,
-                            ExplicitThis = methodReference.ExplicitThis,
-                            DeclaringType = ((TypeDefinition)classMember.StackFrame.MemberReference!).MakeGenericInstanceType(inferredGenericParameters is null
-                                ? ((IdentifierExpressionNode)functionCallExpressionNode.Expression).GenericParameters!.Select(p => (TypeReference)stackFrame.Find<TypeMember>(p)!.StackFrame.MemberReference!).ToArray()
-                                : inferredGenericParameters.Select(t => (TypeReference)t.StackFrame.MemberReference!).ToArray()),
-                            CallingConvention = methodReference.CallingConvention,
-                        };
-                        foreach (var parameterDefinition in methodReference.Parameters)
-                            newMethodReference.Parameters.Add(new(parameterDefinition.Name, parameterDefinition.Attributes, parameterDefinition.ParameterType));
-                        methodReference = newMethodReference;
-                    }
-
-                    var parameters = functionMember.StackFrame.Parameters.ToArray();
-                    for (int argIdx = 0, pIdx = 0; pIdx < parameters.Length; ++argIdx, ++pIdx)
-                    {
-                        var parameter = parameters[pIdx];
-                        if (parameter.Modifier == TokenType.VarArgKeyword)
-                        {
-                            // if a generic parameter, get the real type instead
-                            var destType = parameter.Type! switch
+                            if (classMember.StackFrame.OfType<GenericTypeMember>().Any())
                             {
-                                GenericTypeMember genericTypeMember => ((IdentifierExpressionNode)functionCallExpressionNode.Expression).InferredGenericParameters is { } foundInferredGenericParameters
-                                    ? foundInferredGenericParameters[classMember.StackFrame.OfType<GenericTypeMember>().TakeWhile(w => w.Name != genericTypeMember.Name).Count()]
-                                    : stackFrame.Find<TypeMember>(((IdentifierExpressionNode)functionCallExpressionNode.Expression)
-                                        .GenericParameters![classMember.StackFrame.OfType<GenericTypeMember>().TakeWhile(w => w.Name != genericTypeMember.Name).Count()])!,
-                                EnumMember or ClassMember => parameter.Type!,
-                                _ => throw new NotImplementedException()
-                            };
-
-                            int argCnt = 0;
-                            for (; argCnt + argIdx < functionCallExpressionNode.Arguments.Length && ParseExpressionNodeTypeField(functionCallExpressionNode.Arguments[argIdx], stackFrame)!.IsAssignableTo(destType); ++argCnt) { }
-                            ilProcessor.Emit(OpCodes.Ldc_I4, argCnt);
-                            ilProcessor.Emit(OpCodes.Newarr, (TypeReference)destType.StackFrame.MemberReference!);
-
-                            for (var argIdx2 = argIdx; argIdx2 < argCnt; ++argIdx2)
-                            {
-                                ilProcessor.Emit(OpCodes.Dup);
-                                ilProcessor.Emit(OpCodes.Ldc_I4, argIdx2);
-                                var typeMember = WriteExpressionNode(functionCallExpressionNode.Arguments[argIdx++], ilProcessor, stackFrame);
-                                ilProcessor.Emit(typeMember == IntegerClassDeclaration ? OpCodes.Stelem_I8 : OpCodes.Stelem_Ref);
+                                var newMethodReference = new MethodReference(methodReference.Name, methodReference.ReturnType)
+                                {
+                                    HasThis = methodReference.HasThis,
+                                    ExplicitThis = methodReference.ExplicitThis,
+                                    DeclaringType = ((TypeDefinition)classMember.StackFrame.MemberReference!).MakeGenericInstanceType(inferredGenericParameters is null
+                                        ? ((IdentifierExpressionNode)functionCallExpressionNode.Expression).GenericParameters!.Select(p => (TypeReference)stackFrame.Find<TypeMember>(p)!.StackFrame.MemberReference!).ToArray()
+                                        : inferredGenericParameters.Select(t => (TypeReference)t.StackFrame.MemberReference!).ToArray()),
+                                    CallingConvention = methodReference.CallingConvention,
+                                };
+                                foreach (var parameterDefinition in methodReference.Parameters)
+                                    newMethodReference.Parameters.Add(new(parameterDefinition.Name, parameterDefinition.Attributes, parameterDefinition.ParameterType));
+                                methodReference = newMethodReference;
                             }
 
-                            --argIdx;
+                            ilProcessor.Emit(functionMember.IsConstructor ? OpCodes.Newobj : methodReference.Resolve().IsVirtual ? OpCodes.Callvirt : OpCodes.Call, methodReference);
                         }
-                        else if (WriteExpressionNode(functionCallExpressionNode.Arguments[argIdx], ilProcessor, stackFrame) == IntegerClassDeclaration && parameter.Type == DoubleClassDeclaration)
-                            ilProcessor.Emit(OpCodes.Conv_R8);
+
+                        // specialize the return if necessary
+                        if (functionMember.ReturnType is GenericTypeMember genericTypeMember1)
+                            return inferredGenericParameters!.ElementAt(classMember.StackFrame.OfType<GenericTypeMember>().TakeWhile(g => g.Name != genericTypeMember1.Name).Count());
+                        return functionMember.ReturnType;
                     }
-
-                    ilProcessor.Emit(functionMember.IsConstructor ? OpCodes.Newobj : methodReference.Resolve().IsVirtual ? OpCodes.Callvirt : OpCodes.Call, methodReference);
-
-                    // specialize the return if necessary
-                    if (functionMember.ReturnType is GenericTypeMember genericTypeMember1)
-                        return inferredGenericParameters!.ElementAt(classMember.StackFrame.OfType<GenericTypeMember>().TakeWhile(g => g.Name != genericTypeMember1.Name).Count());
-                    return functionMember.ReturnType;
 
                 default: throw new NotImplementedException();
             }
