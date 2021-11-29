@@ -38,6 +38,13 @@ static partial class CodeGeneration
     public static void Generate(RootNode rootNode, Stream stream, string assemblyName)
     {
         var assembly = AssemblyDefinition.CreateAssembly(new(assemblyName, new()), assemblyName, ModuleKind.Console);
+        assembly.CustomAttributes.Add(new(assembly.MainModule.ImportReference(typeof(System.Runtime.Versioning.TargetFrameworkAttribute).GetConstructor(new[] { typeof(string) })))
+        {
+            ConstructorArguments =
+            {
+                new(assembly.MainModule.TypeSystem.String, ".NETCoreApp,Version=v6.0")
+            },
+        });
         var module = assembly.MainModule!;
 
         #region runtime classes
@@ -968,7 +975,7 @@ static partial class CodeGeneration
                         // specialize the return if necessary
                         if (functionMember.ReturnType is GenericTypeMember genericTypeMember1)
                             return inferredGenericParameters!.ElementAt(classMember.StackFrame.OfType<GenericTypeMember>().TakeWhile(g => g.Name != genericTypeMember1.Name).Count());
-                        return functionMember.ReturnType;
+                        return functionMember.ReturnType?.AsGeneric(inferredGenericParameters?.ToArray());
                     }
 
                 default: throw new NotImplementedException();
@@ -1104,8 +1111,13 @@ static partial class CodeGeneration
                 _ => throw new NotImplementedException()
             };
 
+            return AsGeneric(genericTypes);
+        }
+
+        public TypeMember AsGeneric(TypeMember[]? genericTypes)
+        {
             TypeMember? genericType;
-            if (genericTypes.Length == 0)
+            if (genericTypes is null || genericTypes.Length == 0)
                 return this;
             else if (!genericCache.TryGetValue((this, genericTypes), out genericType))
                 genericCache[(this, genericTypes)] = genericType = this with

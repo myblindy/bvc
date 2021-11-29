@@ -5,7 +5,7 @@ using System.Reflection;
 using var stream = new StringStream(@"
 class Program {
     fun static Main() {
-        val v = [1, 3, 5][2];
+        Console.WriteLine(""[1, 3, 5][2] = ${[1, 3, 5][2]}"");
     }
 }
 
